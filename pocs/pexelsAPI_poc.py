@@ -8,6 +8,7 @@ Data: 2024
 
 import os
 import requests
+import json
 from typing import Any, Dict
 from .template_poc import POCTemplate, logger
 
@@ -24,6 +25,7 @@ class PexelsAPIPOC(POCTemplate):
         self.base_url = "https://api.pexels.com/videos/search"
         self.headers = {}
         self.video_info = None
+        self.historico_file = "pexels_historico.json"
     
     def setup(self) -> bool:
         """Configurar API do Pexels"""
@@ -53,7 +55,63 @@ class PexelsAPIPOC(POCTemplate):
             logger.error(f"Erro na configuração: {e}")
             return False
     
-    def buscar_videos(self, query: str, per_page: int = 1) -> Dict[str, Any]:
+    def carregar_historico(self) -> Dict[str, list]:
+        """Carregar histórico de vídeos já baixados"""
+        try:
+            if os.path.exists(self.historico_file):
+                with open(self.historico_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            return {}
+        except Exception as e:
+            logger.warning(f"Erro ao carregar histórico: {e}")
+            return {}
+    
+    def salvar_historico(self, historico: Dict[str, list]):
+        """Salvar histórico de vídeos baixados"""
+        try:
+            with open(self.historico_file, 'w', encoding='utf-8') as f:
+                json.dump(historico, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"Erro ao salvar histórico: {e}")
+    
+    def adicionar_ao_historico(self, palavra_chave: str, video_id: int):
+        """Adicionar vídeo ao histórico"""
+        historico = self.carregar_historico()
+        if palavra_chave not in historico:
+            historico[palavra_chave] = []
+        
+        if video_id not in historico[palavra_chave]:
+            historico[palavra_chave].append(video_id)
+            # Manter apenas os últimos 50 vídeos por palavra-chave
+            if len(historico[palavra_chave]) > 50:
+                historico[palavra_chave] = historico[palavra_chave][-50:]
+            
+            self.salvar_historico(historico)
+    
+    def selecionar_proximo_video(self, videos: list, palavra_chave: str) -> Dict[str, Any]:
+        """Selecionar o próximo vídeo por ordem de relevância que não foi baixado"""
+        historico = self.carregar_historico()
+        videos_baixados = historico.get(palavra_chave, [])
+        
+        # Procurar o primeiro vídeo que não foi baixado (em ordem de relevância)
+        for i, video in enumerate(videos):
+            if video.get('id') not in videos_baixados:
+                logger.info(f"Selecionado vídeo por relevância: posição {i+1} de {len(videos)}")
+                logger.info(f"ID do vídeo: {video.get('id')}")
+                logger.info(f"Vídeos já baixados para '{palavra_chave}': {len(videos_baixados)}")
+                return video
+        
+        # Se todos os vídeos já foram baixados, resetar e pegar o primeiro
+        logger.info("Todos os vídeos disponíveis já foram baixados, reiniciando do primeiro...")
+        logger.info(f"Resetando histórico para '{palavra_chave}'")
+        
+        # Limpar histórico desta palavra-chave
+        historico[palavra_chave] = []
+        self.salvar_historico(historico)
+        
+        return videos[0]
+    
+    def buscar_videos(self, query: str, per_page: int = 15) -> Dict[str, Any]:
         """Buscar vídeos na API do Pexels"""
         try:
             logger.info(f"Buscando vídeos com a palavra-chave: '{query}'")
@@ -156,15 +214,18 @@ class PexelsAPIPOC(POCTemplate):
                     "data": {}
                 }
             
-            # Pegar o primeiro vídeo
-            primeiro_video = videos[0]
-            self.video_info = primeiro_video
+            # Selecionar próximo vídeo por relevância (evitando repetições)
+            video_selecionado = self.selecionar_proximo_video(videos, self.palavra_chave)
+            self.video_info = video_selecionado
             
-            logger.info(f"Vídeo selecionado: {primeiro_video.get('user', {}).get('name', 'Autor desconhecido')}")
-            logger.info(f"Duração: {primeiro_video.get('duration', 'N/A')} segundos")
+            logger.info(f"Vídeo selecionado: {video_selecionado.get('user', {}).get('name', 'Autor desconhecido')}")
+            logger.info(f"Duração: {video_selecionado.get('duration', 'N/A')} segundos")
             
             # Baixar o vídeo
-            arquivo_baixado = self.baixar_video(primeiro_video)
+            arquivo_baixado = self.baixar_video(video_selecionado)
+            
+            # Adicionar ao histórico para evitar repetição
+            self.adicionar_ao_historico(self.palavra_chave, video_selecionado.get('id'))
             
             result = {
                 "status": "success",
@@ -172,9 +233,9 @@ class PexelsAPIPOC(POCTemplate):
                 "data": {
                     "palavra_chave": self.palavra_chave,
                     "arquivo_baixado": arquivo_baixado,
-                    "video_id": primeiro_video.get('id'),
-                    "autor": primeiro_video.get('user', {}).get('name'),
-                    "duracao": primeiro_video.get('duration'),
+                    "video_id": video_selecionado.get('id'),
+                    "autor": video_selecionado.get('user', {}).get('name'),
+                    "duracao": video_selecionado.get('duration'),
                     "total_resultados": resultado_busca.get('total_results', 0)
                 }
             }

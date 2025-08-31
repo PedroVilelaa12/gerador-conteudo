@@ -9,10 +9,12 @@ gerador-conteudo/
 ├── pocs/                    # Diretório das POCs
 │   ├── __init__.py
 │   ├── template_poc.py     # Template base para novas POCs
-│   └── exemplo_poc.py      # Exemplo de POC (validador de CPF)
+│   ├── exemplo_poc.py      # Exemplo de POC (validador de CPF)
+│   └── rss_feeds_poc.py   # POC: Radar de Notícias (RSS Feeds)
 ├── tests/                   # Testes automatizados
 │   ├── __init__.py
-│   └── test_exemplo_poc.py
+│   ├── test_exemplo_poc.py
+│   └── test_rss_feeds_poc.py
 ├── scripts/                 # Scripts utilitários
 │   ├── __init__.py
 │   └── run_poc.py          # Script para executar POCs
@@ -220,6 +222,19 @@ exit
 # Ver informações
 poetry env info
 ```
+
+## 📋 POCs Implementadas
+
+### 1. **exemplo_poc.py** - Validador de CPF
+- **Objetivo**: Validar números de CPF brasileiros
+- **Funcionalidade**: Algoritmo de validação com dígitos verificadores
+- **Status**: ✅ Implementado e testado
+
+### 2. **rss_feeds_poc.py** - Radar de Notícias (RSS Feeds)
+- **Objetivo**: Buscar as 5 principais notícias de negócios do Brasil
+- **Funcionalidade**: RSS feeds de portais brasileiros (G1, UOL, Estadão, Valor, Agência Brasil)
+- **Vantagens**: Gratuito, confiável, conteúdo brasileiro real
+- **Status**: ✅ Implementado e testado
 
 ## 📋 Checklist para Nova POC
 

@@ -7,8 +7,16 @@ Data: 2024
 """
 
 import re
+import logging
 from typing import Any, Dict
-from template_poc import POCTemplate
+from .template_poc import POCTemplate
+
+# Configurar logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 class CPFValidatorPOC(POCTemplate):

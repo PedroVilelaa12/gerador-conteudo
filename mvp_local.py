@@ -31,14 +31,64 @@ RSS_FEEDS = [
     "http://feeds.reuters.com/reuters/businessNews",         # Reuters Business
     "https://www.cnbc.com/id/100003114/device/rss/rss.html"  # CNBC Finance
 ]
+BRAND_PROFILE = {
+    "planejamento_patrimonial": {
+        "weight": 1.0,
+        "kw": [
+            # pt
+            "planejamento patrimonial", "gestão patrimonial", "proteção patrimonial",
+            "governança familiar", "holding familiar", "sucessão", "herança",
+            "testamento", "trust", "offshore", "blindagem lícita",
+            # en
+            "estate planning", "wealth planning", "asset protection", "family governance", "trusts"
+        ]
+    },
+    "preservacao_risco": {
+        "weight": 0.9,
+        "kw": [
+            "preservação de patrimônio", "segurança", "estabilidade",
+            "diversificação", "alocação", "gestão de risco", "hedge",
+            "seguro patrimonial", "volatilidade", "proteção"
+        ]
+    },
+    "sucessao_legado": {
+        "weight": 0.9,
+        "kw": [
+            "planejamento sucessório", "legado", "next-gen", "educação financeira",
+            "transição geracional", "family office", "fundos exclusivos", "fip", "fii"
+        ]
+    },
+    "fiscal_estrutural": {
+        "weight": 0.75,
+        "kw": [
+            "tributação", "impostos", "reforma tributária", "itcmd", "ir", "estruturação",
+            "custo fiscal", "eficiência fiscal", "tax planning"
+        ]
+    },
+    "mercado_relevante": {
+        "weight": 0.65,
+        "kw": [
+            # macro/mercado com impacto nos clientes HNWI
+            "selic", "copom", "ipca", "juros", "inflação", "câmbio", "dólar",
+            "fed", "ecb", "treasury", "s&p 500", "nasdaq", "volatilidade",
+            "recessão", "crescimento", "guidance", "resultado", "dividendos"
+        ]
+    },
+    "impacto_filantropia_sustentavel": {
+        "weight": 0.6,
+        "kw": [
+            "filantropia", "impacto social", "investimento sustentável",
+            "esg", "projetos sociais", "fundos filantrópicos", "endowment"
+        ]
+    },
+}
 
-# BRAND_WHITELIST = {  # personalize livremente
-#     "selic", "ipca", "dólar", "câmbio", "fed", "cvm", "sec",
-#     "petr4", "vale3", "itub4", "bbas3", "abev3",
-#     "nvda", "aapl", "msft", "googl", "tsla", "s&p500", "nasdaq"
-# }
-
-BRAND_WHITELIST = set()
+# Palavras/assuntos a penalizar (não conversam com o posicionamento/tom)
+BRAND_NEGATIVE_KW = [
+    "fofoca", "celebridade", "escândalo", "polêmica vazia", "crime bárbaro",
+    "clickbait", "tabloide", "viral inútil"
+]
+# BRAND_WHITELIST = set()
 
 DOMAIN_WEIGHTS = {
     "valor": 0.95, "infomoney": 0.90, "reuters": 0.98, "bloomberg": 0.98,
@@ -48,6 +98,33 @@ DOMAIN_WEIGHTS = {
 OUT_DIR = "out"
 
 # ---------------- Utils ----------------
+
+def _text_bag(*parts: str) -> str:
+    txt = " ".join(p for p in parts if p)
+    # normaliza acentuação leve (simples) e caixa
+    txt = txt.lower()
+    # variantes simples de símbolos
+    txt = txt.replace("&", "and").replace("’", "'")
+    return txt
+
+def brand_fit_score(headline: str, entities: Dict[str, List[str]]) -> float:
+    """
+    Retorna score 0..1 com base no BRAND_PROFILE.
+    Soma ponderada (cap 1.0), + penalização se bater palavras negativas.
+    """
+    bag = _text_bag(headline, " ".join(entities.get("topics", [])), " ".join(entities.get("tickers", [])))
+    score = 0.0
+    for cat, cfg in BRAND_PROFILE.items():
+        w = cfg.get("weight", 0.5)
+        if any(kw.lower() in bag for kw in cfg.get("kw", [])):
+            score += w
+    # normaliza (cap em 1.0)
+    score = min(1.0, score)
+
+    # penalização simples para assuntos desalinhados
+    if any(neg in bag for neg in BRAND_NEGATIVE_KW):
+        score *= 0.7  # -30%
+    return score
 def ensure_out():
     os.makedirs(OUT_DIR, exist_ok=True)
 
@@ -337,7 +414,7 @@ def fetch_trends(cluster: Cluster, minutes_back: int) -> Dict[str, Any]:
         if not kws:
             return {"interest": 0.0, "velocity": 0.0, "topics": []}
 
-        pytrends.build_payload(kws, timeframe=timeframe, geo="")  # global; ajuste para "BR" se quiser
+        pytrends.build_payload(kws, timeframe=timeframe, geo="BR")  # global; ajuste para "BR" se quiser
         df = pytrends.interest_over_time()
         if df is None or df.empty:
             return {"interest": 0.0, "velocity": 0.0, "topics": kws}
@@ -405,8 +482,7 @@ def compute_score(cluster: Cluster, social: SocialSignals, recent_heads: List[se
     sv = clamp(social.velocity)                 # 0-1 (já fundido com Trends)
     eng = clamp(social.engagement_rate)         # ~0-0.5
     sent = 1 - abs(social.sentiment_mean)       # evita extremos
-    entities_all = set(cluster.entities.get("topics", []) + cluster.entities.get("tickers", []))
-    bf = 1.0 if any(x in BRAND_WHITELIST for x in entities_all) else (0.4 if entities_all else 0.2)
+    bf = brand_fit_score(cluster.headline, cluster.entities)
     tokens = set(re.findall(r"[a-z0-9$\.]{2,}", cluster.headline.lower()))
     nov = novelty_against_recent(tokens, recent_heads)
     risk_penalty = 0.85  # ajustável via regras

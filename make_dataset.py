@@ -1,376 +1,523 @@
-# make_dataset.py
-# Gera um dataset unificado para rotulagem a partir de múltiplas execuções do mvp_local.py (out/)
-# e de conteúdos extras (planilhas históricas, newsletters, posts, etc.).
+# mvp_backfill.py
+# Coleta histórico "massivo" de notícias (GDELT Doc API + opcional NewsAPI),
+# aplica filtros e scoring semelhantes ao mvp_local.py, e gera dataset TOP-K
+# em labeling/to_label.csv (sem mexer no seu mvp_local.py original).
 #
-# Saída: labeling/to_label.csv
+# Requisitos: requests, pandas, tqdm, vaderSentiment, python-dateutil
+#
+# Exemplos:
+#   python mvp_backfill.py --from 2025-08-01 --to 2025-09-01 --top-k 10000
+#   python mvp_backfill.py --from 2025-06-01 --to 2025-09-01 --domains valor.globo.com,infomoney.com.br,reuters.com,cnbc.com,wsj.com --top-k 10000
 
 import os
 import re
-import glob
+import math
+import time
+import json
 import argparse
 import hashlib
 import warnings
-from datetime import datetime
+from dataclasses import dataclass, asdict
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 
+import requests
 import pandas as pd
 from tqdm import tqdm
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+from dateutil import parser as dtparser
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
-OUTPUT_PATH = "labeling/to_label.csv"
-REQUIRED_DIRS = ["labeling"]
-
-# ---- Colunas finais do dataset (ordem amigável para o app) ----
-FINAL_COLS = [
-    "uid", "source_kind", "origin_file",
-    "cluster_id", "published_at", "headline", "summary", "urls", "sources",
-    "topics", "tickers",
-    # sinais e scores (quando vierem do MVP)
-    "total", "decision",
-    "freshness", "authority", "social_velocity", "engagement",
-    "sentiment", "brand_fit", "novelty",
-    "trends_interest", "trends_velocity",
-]
-
-# ---- Detectores de CSV "extra" (vários formatos) ----
-EXTRA_SCHEMA_CANDIDATES = [
-    # (descrição, mapeamento de colunas => padrão final)
-    {
-        "name": "newsletter_1",
-        "map": {
-            "title": "headline",
-            "link": "urls",
-            "date": "published_at",
-            "source": "sources",
-            "summary": "summary",
-            "tags": "topics",
-        }
+# =========================
+# Config / Perfis de marca
+# =========================
+BRAND_PROFILE = {
+    "planejamento_patrimonial": {
+        "weight": 1.0,
+        "kw": [
+            "planejamento patrimonial","gestão patrimonial","proteção patrimonial","governança familiar",
+            "holding familiar","sucessão","herança","testamento","trust","offshore","blindagem lícita",
+            "estate planning","wealth planning","asset protection","family governance","trusts"
+        ]
     },
-    {
-        "name": "social_posts",
-        "map": {
-            "text": "headline",
-            "url": "urls",
-            "created_at": "published_at",
-            "platform": "sources",
-            "tags": "topics",
-        }
+    "preservacao_risco": {
+        "weight": 0.9,
+        "kw": ["preservação de patrimônio","segurança","estabilidade","diversificação","alocação",
+               "gestão de risco","hedge","seguro patrimonial","volatilidade","proteção"]
     },
-    {
-        "name": "generic_news",
-        "map": {
-            "headline": "headline",
-            "url": "urls",
-            "published_at": "published_at",
-            "source": "sources",
-            "summary": "summary",
-            "topics": "topics",
-            "tickers": "tickers",
-        }
+    "sucessao_legado": {
+        "weight": 0.9,
+        "kw": ["planejamento sucessório","legado","next-gen","educação financeira","transição geracional",
+               "family office","fundos exclusivos","fip","fii"]
     },
-    # fallback mínimo (headline + url)
-    {
-        "name": "minimal",
-        "map": {
-            "headline": "headline",
-            "url": "urls",
-        }
-    }
-]
+    "fiscal_estrutural": {
+        "weight": 0.75,
+        "kw": ["tributação","impostos","reforma tributária","itcmd","ir","estruturação","custo fiscal",
+               "eficiência fiscal","tax planning"]
+    },
+    "mercado_relevante": {
+        "weight": 0.65,
+        "kw": ["selic","copom","ipca","juros","inflação","câmbio","dólar","fed","ecb","treasury",
+               "s&p 500","nasdaq","volatilidade","recessão","crescimento","guidance","resultado","dividendos"]
+    },
+    "impacto_filantropia_sustentavel": {
+        "weight": 0.6,
+        "kw": ["filantropia","impacto social","investimento sustentável","esg","projetos sociais",
+               "fundos filantrópicos","endowment"]
+    },
+}
+BRAND_NEGATIVE_KW = ["fofoca","celebridade","escândalo","polêmica vazia","crime bárbaro","clickbait","tabloide","viral inútil"]
 
-def sha1(s: str) -> str:
-    return hashlib.sha1(s.encode("utf-8")).hexdigest()
+# Autoridade por domínio (heurística)
+DOMAIN_WEIGHTS = {
+    "valor": 0.95, "infomoney": 0.90, "reuters": 0.98, "bloomberg": 0.98, "wsj": 0.90, "cnbc": 0.88,
+    "bbc": 0.90, "ft": 0.96, "estadao": 0.88, "oglobo": 0.88, "folha": 0.86
+}
 
-def normalize_date(x: Any) -> Optional[str]:
-    """Converte para ISO8601 (string) ou None."""
-    if x is None or (isinstance(x, float) and pd.isna(x)):
-        return None
-    try:
-        # tenta vários formatos
-        ts = pd.to_datetime(x, utc=False, errors="coerce")
-        if pd.isna(ts):
-            return None
-        # mantém sem timezone; app só exibe
-        return ts.strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return None
+# Ruído
+CRIME_KW = ["assassinato","homicídio","homicidio","feminicídio","feminicidio","tiroteio","execução","executado",
+            "estupr","estupro","latrocínio","latrocinio","tráfico","trafico","facada","bala perdida","agressão","agressao",
+            "morto a tiros","morre após","corpo é encontrado"]
+ACIDENTE_KW = ["acidente","colisão","colisao","capotagem","batida","engavetamento","cai de","queda de","desabamento","incêndio","incendio"]
+TABLOIDE_KW = ["celebridade","fofoca","viralizou","influencer","reality","bbb"]
+JORNAL_LOCAL_HINTS = ["vídeos:","videos:","jornal","edição","1ª edição","2ª edição","bom dia","eptv","jl1","jl2","df1"]
 
-def read_csv_safely(path: str) -> pd.DataFrame:
-    try:
-        return pd.read_csv(path)
-    except Exception:
-        try:
-            return pd.read_csv(path, sep=";")
-        except Exception:
-            return pd.DataFrame()
+# Entidades simples
+TICKER_PATTERNS = [re.compile(r"\b([A-Z]{4}\d)\.SA\b"), re.compile(r"\$([A-Z]{1,5})\b")]
+TOPIC_KEYWORDS = {
+    "selic","ipca","juros","inflação","inflacao","câmbio","cambio","dólar","dolar","fed","copom","cvm","sec",
+    "balanço","balanco","guidance","dividendos","resultado","pil","gdp","payroll","petrobras","vale",
+    "itau","ambev","magalu","b3","ibovespa","nasdaq","s&p500","opec"
+}
 
-def find_out_dirs(scan_root: str) -> List[str]:
-    """
-    Procura subpastas chamadas 'out' que tenham pelo menos 'clusters.csv'.
-    Ex.: ./rodada_2025-09-20/out/, ./out/, ./historico/run1/out/
-    """
-    candidates = []
-    pattern = os.path.join(scan_root, "**", "out")
-    for d in glob.glob(pattern, recursive=True):
-        if os.path.isdir(d) and os.path.exists(os.path.join(d, "clusters.csv")):
-            candidates.append(os.path.abspath(d))
-    # inclui raiz/out se existir
-    root_out = os.path.join(os.path.abspath(scan_root), "out")
-    if os.path.exists(os.path.join(root_out, "clusters.csv")) and root_out not in candidates:
-        candidates.append(root_out)
-    return sorted(set(candidates))
+# Saídas
+OUT_DIR = "backfill_out"
+DATASET_PATH = "labeling/to_label.csv"
+REQUIRED_DIRS = ["labeling", OUT_DIR]
 
-def load_one_mvp_run(out_dir: str) -> pd.DataFrame:
-    """
-    Carrega e faz join de clusters.csv + decisions.csv + social_signals.csv de uma única execução do MVP.
-    Retorna dataframe já parcialmente normalizado.
-    """
-    p_clusters = os.path.join(out_dir, "clusters.csv")
-    p_decisions = os.path.join(out_dir, "decisions.csv")
-    p_social = os.path.join(out_dir, "social_signals.csv")
-
-    if not os.path.exists(p_clusters):
-        return pd.DataFrame()
-
-    dfc = read_csv_safely(p_clusters)
-    dfd = read_csv_safely(p_decisions) if os.path.exists(p_decisions) else pd.DataFrame()
-    dfs = read_csv_safely(p_social) if os.path.exists(p_social) else pd.DataFrame()
-
-    # renomear algumas colunas conhecidas (robustez)
-    ren_dfd = {
-        "social_velocity": "social_velocity",
-        "engagement": "engagement",
-        "sentiment": "sentiment",
-        "brand_fit": "brand_fit",
-        "novelty": "novelty",
-        "authority": "authority",
-        "freshness": "freshness",
-        "total": "total",
-        "decision": "decision",
-        "cluster_id": "cluster_id",
-    }
-    dfd = dfd.rename(columns=ren_dfd)
-
-    # social_signals às vezes tem nomes ligeiramente diferentes
-    ren_dfs = {
-        "velocity_fused": "social_velocity",
-        "engagement_twitter": "engagement",
-        "trends_interest": "trends_interest",
-        "trends_velocity": "trends_velocity",
-    }
-    dfs = dfs.rename(columns=ren_dfs)
-
-    # join por cluster_id
-    df = dfc.copy()
-    if not dfd.empty:
-        df = df.merge(dfd[["cluster_id","freshness","authority","social_velocity","engagement",
-                           "sentiment","brand_fit","novelty","risk_penalty","total","decision"]],
-                      on="cluster_id", how="left")
-    if not dfs.empty:
-        # mantém só as colunas que existem
-        keep_cols = [c for c in ["cluster_id","social_velocity","engagement","trends_interest","trends_velocity"] if c in dfs.columns]
-        if keep_cols:
-            df = df.merge(dfs[keep_cols], on="cluster_id", how="left", suffixes=("", "_soc"))
-
-    # normaliza tipos e campos base
-    df["origin_file"] = os.path.abspath(out_dir)
-    df["source_kind"] = "news"
-    df["published_at"] = df["published_at"].apply(normalize_date)
-    # summary pode não existir no clusters.csv; mantém vazio
-    if "summary" not in df.columns:
-        df["summary"] = ""
-
-    # reduz para o conjunto padrão (o restante fica como NA)
-    for col in FINAL_COLS:
-        if col not in df.columns:
-            df[col] = None
-
-    return df[FINAL_COLS].copy()
-
-def load_all_mvp_runs(out_dirs: List[str]) -> pd.DataFrame:
-    frames = []
-    for d in tqdm(out_dirs, desc="Lendo execuções do MVP"):
-        df = load_one_mvp_run(d)
-        if not df.empty:
-            frames.append(df)
-    if frames:
-        big = pd.concat(frames, ignore_index=True)
-    else:
-        big = pd.DataFrame(columns=FINAL_COLS)
-
-    # cria uid robusto (headline + first_url)
-    def first_url(s: str) -> str:
-        if not isinstance(s, str): return ""
-        return s.split(" | ")[0].strip()
-    big["urls"] = big["urls"].fillna("")
-    big["headline"] = big["headline"].fillna("")
-    big["uid"] = (big["headline"].astype(str) + "|" + big["urls"].apply(first_url)).apply(sha1)
-
-    return big
-
-def sniff_schema_and_map(df: pd.DataFrame) -> Optional[pd.DataFrame]:
-    """
-    Tenta mapear um CSV "extra" para o esquema padrão. Retorna dataframe mapeado ou None.
-    """
-    cols = set(c.lower() for c in df.columns)
-    for cand in EXTRA_SCHEMA_CANDIDATES:
-        src_map = cand["map"]
-        if all(src in cols for src in src_map.keys() if src not in ["tags"]):  # tags pode faltar
-            # cria novo dataframe com nomes padrão
-            nd = pd.DataFrame()
-            for src, dst in src_map.items():
-                # encontra coluna original independentemente de caixa
-                matches = [c for c in df.columns if c.lower() == src]
-                if matches:
-                    nd[dst] = df[matches[0]]
-                else:
-                    nd[dst] = None
-            return nd
-    return None
-
-def load_extras(extra_dir: str) -> pd.DataFrame:
-    """
-    Lê todos os CSVs sob extra_dir/ e tenta mapear para o padrão. Marca como source_kind='other'.
-    """
-    if not extra_dir or not os.path.isdir(extra_dir):
-        return pd.DataFrame(columns=FINAL_COLS)
-
-    csvs = glob.glob(os.path.join(extra_dir, "**", "*.csv"), recursive=True)
-    frames = []
-    for path in tqdm(csvs, desc="Lendo extras"):
-        raw = read_csv_safely(path)
-        if raw.empty:
-            continue
-        mapped = sniff_schema_and_map(raw)
-        if mapped is None:
-            # tentativa best-effort
-            mapped = pd.DataFrame()
-            mapped["headline"] = raw.get("headline", raw.get("title", raw.get("text", "")))
-            mapped["urls"] = raw.get("urls", raw.get("url", ""))
-            mapped["published_at"] = raw.get("published_at", raw.get("date",""))
-            mapped["sources"] = raw.get("sources", raw.get("source",""))
-            mapped["summary"] = raw.get("summary", "")
-            mapped["topics"] = raw.get("topics", raw.get("tags", ""))
-            mapped["tickers"] = raw.get("tickers", "")
-
-        # normalizações
-        mapped["published_at"] = mapped["published_at"].apply(normalize_date)
-        mapped["origin_file"] = os.path.abspath(path)
-        mapped["source_kind"] = "other"
-
-        # adiciona colunas ausentes
-        for col in FINAL_COLS:
-            if col not in mapped.columns:
-                mapped[col] = None
-
-        frames.append(mapped[FINAL_COLS].copy())
-
-    if frames:
-        big = pd.concat(frames, ignore_index=True)
-    else:
-        big = pd.DataFrame(columns=FINAL_COLS)
-
-    # uid
-    big["urls"] = big["urls"].fillna("")
-    big["headline"] = big["headline"].fillna("")
-    big["uid"] = (big["headline"].astype(str) + "|" + big["urls"].astype(str)).apply(sha1)
-    return big
-
-def drop_already_labeled(df: pd.DataFrame, labels_path: Optional[str]) -> pd.DataFrame:
-    if not labels_path or not os.path.exists(labels_path):
-        return df
-    try:
-        lab = pd.read_csv(labels_path)
-        if "uid" not in lab.columns:
-            return df
-        before = len(df)
-        df = df[~df["uid"].isin(lab["uid"].astype(str))]
-        removed = before - len(df)
-        print(f"Removidos {removed} itens já rotulados (baseada em {labels_path}).")
-        return df
-    except Exception:
-        return df
-
-def sample_balance(df: pd.DataFrame, max_rows: int) -> pd.DataFrame:
-    """
-    Amostra até max_rows mantendo diversidade temporal e de origem.
-    Estratégia:
-      - prioridade para 'news'
-      - mantém mistura por mês e source_kind
-    """
-    if max_rows <= 0 or len(df) <= max_rows:
-        return df.sample(frac=1.0, random_state=42).reset_index(drop=True)
-
-    # bucket por ano-mês
-    df["_ym"] = pd.to_datetime(df["published_at"], errors="coerce").dt.strftime("%Y-%m")
-    df["_ym"] = df["_ym"].fillna("unknown")
-    # cota por (source_kind, ym)
-    buckets = []
-    per_bucket = max(50, max_rows // 40)  # heurística: até 40 buckets
-    for (kind, ym), g in df.groupby(["source_kind", "_ym"]):
-        g = g.sample(n=min(len(g), per_bucket), random_state=42)
-        buckets.append(g)
-    mixed = pd.concat(buckets, ignore_index=True).drop_duplicates("uid")
-    if len(mixed) > max_rows:
-        mixed = mixed.sample(n=max_rows, random_state=42)
-    mixed = mixed.drop(columns=["_ym"], errors="ignore")
-    return mixed.sample(frac=1.0, random_state=123).reset_index(drop=True)
-
+# =========================
+# Utils / entidades / score
+# =========================
 def ensure_dirs():
     for d in REQUIRED_DIRS:
         os.makedirs(d, exist_ok=True)
 
+def now_utc():
+    return datetime.now(timezone.utc)
+
+def parse_dt_any(s: str) -> Optional[datetime]:
+    try:
+        d = dtparser.parse(s)
+        if not d.tzinfo:
+            d = d.replace(tzinfo=timezone.utc)
+        return d.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+def canonical_url(u: str) -> str:
+    if not u: return ""
+    u = u.strip()
+    u = re.sub(r"(\?|#).*", "", u)
+    return u.lower().rstrip("/")
+
+def domain_from_url(u: str) -> str:
+    m = re.search(r"https?://([^/]+)/", u + "/")
+    if not m: return ""
+    host = m.group(1).lower().replace("www.", "")
+    return host
+
+def short_host(host: str) -> str:
+    h = host.replace(".com.br","").replace(".com","").replace(".globo","")
+    parts = h.split(".")
+    return parts[-1] if parts else h
+
+def domain_weight(url: str) -> float:
+    host = domain_from_url(url)
+    sh = short_host(host)
+    for k, v in DOMAIN_WEIGHTS.items():
+        if k in host or k == sh:
+            return v
+    return 0.60
+
+def _any_in(text: str, kws: List[str]) -> bool:
+    t = text.lower()
+    return any(k in t for k in kws)
+
+def noise_penalty(headline: str) -> float:
+    t = headline.lower()
+    score = 0.0
+    if _any_in(t, CRIME_KW):     score += 0.6
+    if _any_in(t, ACIDENTE_KW):  score += 0.4
+    if _any_in(t, TABLOIDE_KW):  score += 0.3
+    if _any_in(t, JORNAL_LOCAL_HINTS): score += 0.4
+    return min(1.0, score)
+
+def extract_entities(text: str) -> Dict[str, List[str]]:
+    text_low = text.lower()
+    tickers = set()
+    for pat in TICKER_PATTERNS:
+        for m in pat.findall(text):
+            tickers.add(m.lower() if isinstance(m, str) else m[0].lower())
+    topics = {w for w in TOPIC_KEYWORDS if w in text_low}
+    caps = set(re.findall(r"\b[A-Z]{2,6}\b", text))
+    return {"tickers": sorted(tickers), "topics": sorted(topics), "caps": sorted(caps)}
+
+def brand_fit_score(headline: str, entities: Dict[str, List[str]]) -> float:
+    def _bag(*parts: str) -> str:
+        return " ".join(p for p in parts if p).lower()
+    bag = _bag(headline, " ".join(entities.get("topics", [])), " ".join(entities.get("tickers", [])))
+    score = 0.0
+    for _, cfg in BRAND_PROFILE.items():
+        w = cfg.get("weight", 0.5)
+        if any(kw.lower() in bag for kw in cfg.get("kw", [])):
+            score += w
+    score = min(1.0, score)
+    if any(neg in bag for neg in BRAND_NEGATIVE_KW):
+        score *= 0.7
+    return score
+
+def freshness_from_age(age_hours: float, tau_hours: float) -> float:
+    # frescor para histórico: tau mais alto, menos punitivo
+    return math.exp(-age_hours / tau_hours)
+
+@dataclass
+class Row:
+    cluster_id: str
+    published_at: datetime
+    headline: str
+    url: str
+    source: str
+    entities: Dict[str, List[str]]
+    sentiment: float
+    authority: float
+    brand_fit: float
+    freshness: float
+    novelty: float
+    engagement: float
+    social_velocity: float
+    total: float
+    decision: str
+
+def fingerprint(title: str, url: str) -> str:
+    canon = f"{canonical_url(url)}|{title[:160]}"
+    return hashlib.md5(canon.encode()).hexdigest()
+
+def novelty_against_recent(tokens: set, memory: List[set]) -> float:
+    def jac(a: set, b: set):
+        u = len(a | b)
+        return 0.0 if u == 0 else len(a & b)/u
+    sim = max([jac(tokens, rh) for rh in memory], default=0.0)
+    return 1 - sim
+
+def compute_score_row(headline: str, url: str, published_at: datetime,
+                      sent: float, entities: Dict[str, List[str]],
+                      recent_tokens: List[set],
+                      tau_hours: float,
+                      post_cutoff: float,
+                      watch_cutoff: float) -> Row:
+    age_h = max(0.0, (now_utc() - published_at).total_seconds()/3600.0)
+    f = freshness_from_age(age_h, tau_hours)
+    a = domain_weight(url)
+    sv = 0.0  # sem Twitter histórico
+    eng = 0.0
+    sent_comp = 1 - abs(sent)
+    bf = brand_fit_score(headline, entities)
+    tokens = set(re.findall(r"[a-z0-9$\.]{2,}", headline.lower()))
+    nov = novelty_against_recent(tokens, recent_tokens)
+    base = 100 * (0.20*f + 0.18*a + 0.00*sv + 0.08*eng + 0.22*bf + 0.15*nov + 0.17*sent_comp)
+
+    # penalidade de ruído
+    pen = noise_penalty(headline)
+    total = base * (1.0 - 0.4*pen)
+
+    decision = "POST" if total >= post_cutoff else ("WATCH" if total >= watch_cutoff else "DROP")
+    return Row(
+        cluster_id=fingerprint(headline, url),
+        published_at=published_at,
+        headline=headline,
+        url=url,
+        source=domain_from_url(url),
+        entities=entities,
+        sentiment=sent_comp,
+        authority=a,
+        brand_fit=bf,
+        freshness=f,
+        novelty=nov,
+        engagement=eng,
+        social_velocity=sv,
+        total=total,
+        decision=decision
+    )
+
+# =========================
+# Coleta: GDELT (principal)
+# =========================
+GDELT_ENDPOINT = "https://api.gdeltproject.org/api/v2/doc/doc"
+
+def gdelt_fetch(start: datetime, end: datetime, query: Optional[str], maxrecords: int = 250) -> List[Dict[str, Any]]:
+    """
+    Busca artigos na janela [start, end] (UTC). Retorna lista com metadados.
+    """
+    params = {
+        "format": "json",
+        "maxrecords": str(maxrecords),
+        "sort": "DateDesc",
+        "startdatetime": start.strftime("%Y%m%d%H%M%S"),
+        "enddatetime": end.strftime("%Y%m%d%H%M%S")
+    }
+    if query:
+        params["query"] = query
+    try:
+        r = requests.get(GDELT_ENDPOINT, params=params, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        return data.get("articles", []) or []
+    except Exception:
+        return []
+
+def build_query(domains: List[str], languages: List[str], free_text: Optional[str]) -> str:
+    parts = []
+    if domains:
+        doms = [d.strip() for d in domains if d.strip()]
+        if doms:
+            parts.append(" OR ".join([f'domain:{d}' for d in doms]))
+    if languages:
+        # GDELT usa "sourceCountry:" e "lang:" (lang:por/eng/esp...). Vamos usar lang:
+        langs = " OR ".join([f"lang:{l}" for l in languages])
+        parts.append(f"({langs})")
+    if free_text:
+        parts.append(f"({free_text})")
+    if not parts:
+        return ""
+    return " AND ".join(parts)
+
+# =========================
+# Coleta: NewsAPI (opcional)
+# =========================
+NEWSAPI_URL = "https://newsapi.org/v2/everything"
+
+def newsapi_fetch(start: datetime, end: datetime, domains: List[str], query: Optional[str], api_key: str, page: int = 1, page_size: int = 100):
+    params = {
+        "from": start.isoformat(timespec="seconds"),
+        "to": end.isoformat(timespec="seconds"),
+        "language": "pt",
+        "sortBy": "publishedAt",
+        "page": page,
+        "pageSize": page_size,
+        "apiKey": api_key
+    }
+    if domains:
+        params["domains"] = ",".join(domains)
+    if query:
+        params["q"] = query
+    try:
+        r = requests.get(NEWSAPI_URL, params=params, timeout=30)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return {"articles": []}
+
+# =========================
+# Orquestração
+# =========================
 def main():
-    ap = argparse.ArgumentParser(description="Gera labeling/to_label.csv unificando saídas do MVP e CSVs extras.")
-    ap.add_argument("--scan-root", default=".", help="Raiz para procurar subpastas com 'out/'.")
-    ap.add_argument("--extra-dir", default=None, help="Diretório com CSVs extras (posts, newsletters, etc.).")
-    ap.add_argument("--exclude-labeled", default=None, help="CSV com labels existentes (para excluir do dataset).")
-    ap.add_argument("--max-rows", type=int, default=50000, help="Limite de linhas na saída (amostragem balanceada).")
+    ap = argparse.ArgumentParser(description="Backfill histórico massivo com GDELT (+ opcional NewsAPI) e TOP-K dataset.")
+    ap.add_argument("--from", dest="from_date", required=True, help="Data inicial (YYYY-MM-DD).")
+    ap.add_argument("--to", dest="to_date", required=True, help="Data final (YYYY-MM-DD).")
+    ap.add_argument("--step-minutes", type=int, default=60, help="Janela de varredura (minutos) para GDELT.")
+    ap.add_argument("--domains", type=str, default="",
+                    help="Lista de domínios (vírgula) para focar (ex.: valor.globo.com,infomoney.com.br,reuters.com).")
+    ap.add_argument("--languages", type=str, default="por,eng", help="Códigos de idioma GDELT (ex.: por,eng).")
+    ap.add_argument("--query", type=str, default="", help="Texto livre adicional (ex.: (juros OR selic))")
+    ap.add_argument("--sleep-ms", type=int, default=400, help="Intervalo (ms) entre chamadas GDELT (evitar rate limit).")
+    ap.add_argument("--freshness-tau-days", type=float, default=90.0, help="Tau da função de frescor (histórico).")
+    ap.add_argument("--post-cutoff", type=float, default=70.0)
+    ap.add_argument("--watch-cutoff", type=float, default=50.0)
+    ap.add_argument("--top-k", type=int, default=10000, help="Quantidade de itens finais no dataset.")
+    ap.add_argument("--use-newsapi", action="store_true", help="Habilita NewsAPI se NEWSAPI_KEY estiver setada.")
+    ap.add_argument("--newsapi-query", type=str, default="", help="Query NewsAPI (se habilitado).")
     args = ap.parse_args()
 
     ensure_dirs()
+    analyzer = SentimentIntensityAnalyzer()
 
-    # 1) Carrega todas execuções do MVP encontradas
-    out_dirs = find_out_dirs(args.scan_root)
-    if not out_dirs:
-        print("⚠️ Nenhuma pasta 'out' encontrada. Rode o mvp_local.py antes, ou aponte --scan-root corretamente.")
-    df_mvp = load_all_mvp_runs(out_dirs)
-    print(f"[MVP] Itens carregados: {len(df_mvp)}")
+    start_date = datetime.fromisoformat(args.from_date).replace(tzinfo=timezone.utc)
+    end_date = datetime.fromisoformat(args.to_date).replace(tzinfo=timezone.utc)
+    step = timedelta(minutes=args.step_minutes)
+    tau_h = args.freshness_tau_days * 24.0
 
-    # 2) Carrega extras
-    df_extra = load_extras(args.extra_dir) if args.extra_dir else pd.DataFrame(columns=FINAL_COLS)
-    print(f"[EXTRAS] Itens carregados: {len(df_extra)}")
+    domains = [d.strip() for d in args.domains.split(",") if d.strip()]
+    languages = [l.strip() for l in args.languages.split(",") if l.strip()]
+    gdelt_q = build_query(domains, languages, args.query if args.query else None)
 
-    # 3) Unifica
-    base = pd.concat([df_mvp, df_extra], ignore_index=True)
-    if base.empty:
-        print("⚠️ Base vazia. Nada a salvar.")
+    rows: List[Row] = []
+    tokens_memory: List[set] = []
+
+    # --------- GDELT sweep ---------
+    print(f"[GDELT] Varredura {start_date.isoformat()} → {end_date.isoformat()} | passo={step} | query='{gdelt_q or '*'}'")
+    t = start_date
+    pbar = tqdm(total=int((end_date - start_date)/step) + 1)
+    while t < end_date:
+        window_end = min(end_date, t + step)
+        arts = gdelt_fetch(t, window_end, gdelt_q, maxrecords=250)
+        for a in arts:
+            title = (a.get("title") or "").strip()
+            url = (a.get("url") or "").strip()
+            if not title or not url:
+                continue
+            # filtro básico por domínio, se foi passado explicitamente
+            if domains:
+                host = domain_from_url(url)
+                if not any(d in host for d in domains):
+                    continue
+
+            # published datetime
+            dt = parse_dt_any(a.get("seendate") or a.get("publishedDate") or a.get("publishedAt") or "")
+            if not dt:
+                # fallback: tenta do body if present
+                dt = window_end
+
+            entities = extract_entities(title)
+            sent = analyzer.polarity_scores(title)["compound"]
+
+            row = compute_score_row(
+                headline=title,
+                url=url,
+                published_at=dt,
+                sent=sent,
+                entities=entities,
+                recent_tokens=tokens_memory,
+                tau_hours=tau_h,
+                post_cutoff=args.post_cutoff,
+                watch_cutoff=args.watch_cutoff
+            )
+            rows.append(row)
+            # memória leve para novelty
+            tokens_memory.append(set(re.findall(r"[a-z0-9$\.]{2,}", title.lower())))
+            if len(tokens_memory) > 5000:
+                tokens_memory = tokens_memory[-5000:]
+        pbar.update(1)
+        t = window_end
+        time.sleep(args.sleep_ms/1000.0)
+    pbar.close()
+
+    # --------- NewsAPI opcional ---------
+    if args.use_newsapi and os.getenv("NEWSAPI_KEY"):
+        key = os.getenv("NEWSAPI_KEY")
+        print("[NewsAPI] Coleta adicional…")
+        page = 1
+        while True:
+            resp = newsapi_fetch(start_date, end_date, domains, args.newsapi_query, key, page=page, page_size=100)
+            arts = resp.get("articles", []) or []
+            if not arts:
+                break
+            for a in arts:
+                title = (a.get("title") or "").strip()
+                url = (a.get("url") or "").strip()
+                if not title or not url:
+                    continue
+                dt = parse_dt_any(a.get("publishedAt") or "")
+                if not dt:
+                    continue
+                entities = extract_entities(title)
+                sent = analyzer.polarity_scores(title)["compound"]
+                row = compute_score_row(
+                    headline=title, url=url, published_at=dt, sent=sent, entities=entities,
+                    recent_tokens=tokens_memory, tau_hours=tau_h,
+                    post_cutoff=args.post_cutoff, watch_cutoff=args.watch_cutoff
+                )
+                rows.append(row)
+                tokens_memory.append(set(re.findall(r"[a-z0-9$\.]{2,}", title.lower())))
+                if len(tokens_memory) > 5000:
+                    tokens_memory = tokens_memory[-5000:]
+            page += 1
+            # NewsAPI tem rate-limit também; ajuste se necessário
+            time.sleep(0.3)
+
+    if not rows:
+        print("⚠️ Nenhuma notícia coletada no intervalo/fonte escolhidos.")
         return
 
-    # 4) Dedup por UID (headline + url)
-    base = base.drop_duplicates("uid")
+    # --------- Dedup e seleção TOP-K ---------
+    print(f"[Coleta] Total bruto: {len(rows)} itens")
+    # Dedup por (title+url) fingerprint
+    dedup_map: Dict[str, Row] = {}
+    for r in rows:
+        dedup_map[r.cluster_id] = r  # keep last (scores parecidos, tanto faz)
+    items = list(dedup_map.values())
+    print(f"[Dedup] Após dedup: {len(items)}")
 
-    # 5) Excluir já rotulados (opcional)
-    base = drop_already_labeled(base, args.exclude_labeled)
+    # Ordena por score + decisão + freshness + data
+    order_map = {"POST": 2, "WATCH": 1, "DROP": 0}
+    items.sort(key=lambda x: (
+        x.total,
+        order_map.get(x.decision, -1),
+        x.freshness,
+        x.published_at
+    ), reverse=True)
 
-    # 6) Amostragem balanceada (se passar do limite)
-    base = sample_balance(base, args.max_rows)
+    if args.top_k > 0 and len(items) > args.top_k:
+        items = items[:args.top_k]
+    print(f"[Seleção] Mantidos TOP-K: {len(items)}")
 
-    # 7) Ordena por data desc (quando houver)
-    base["__ts"] = pd.to_datetime(base["published_at"], errors="coerce")
-    base = base.sort_values(["__ts","source_kind"], ascending=[False, True]).drop(columns=["__ts"])
+    # --------- Salvar CSVs auxiliares + dataset ---------
+    os.makedirs(OUT_DIR, exist_ok=True)
+    df = pd.DataFrame([{
+        "cluster_id": r.cluster_id,
+        "published_at": r.published_at.isoformat(),
+        "headline": r.headline,
+        "url": r.url,
+        "source": r.source,
+        "topics": " ".join(r.entities.get("topics", [])),
+        "tickers": " ".join(r.entities.get("tickers", [])),
+        "freshness": round(r.freshness, 4),
+        "authority": round(r.authority, 4),
+        "social_velocity": round(r.social_velocity, 4),
+        "engagement": round(r.engagement, 4),
+        "sentiment": round(r.sentiment, 4),
+        "brand_fit": round(r.brand_fit, 4),
+        "novelty": round(r.novelty, 4),
+        "total": round(r.total, 2),
+        "decision": r.decision
+    } for r in items])
 
-    # 8) Garante todas as colunas finais
-    for c in FINAL_COLS:
-        if c not in base.columns:
-            base[c] = None
-    base = base[FINAL_COLS + [c for c in base.columns if c not in FINAL_COLS]]  # preserva extras no fim
+    df.to_csv(os.path.join(OUT_DIR, "historical_top.csv"), index=False)
+    # decisions-like
+    df_dec = df[["cluster_id","freshness","authority","social_velocity","engagement","sentiment","brand_fit","novelty","total","decision"]]
+    df_dec.to_csv(os.path.join(OUT_DIR, "decisions.csv"), index=False)
 
-    # 9) Salva
-    base.to_csv(OUTPUT_PATH, index=False, encoding="utf-8")
-    print(f"✅ Dataset salvo em {OUTPUT_PATH} (linhas: {len(base)})")
-    print("   Colunas-chave:", ", ".join(FINAL_COLS))
+    # ===== Dataset labeling/to_label.csv =====
+    # Monta no mesmo esquema que seu app espera (campos principais)
+    ensure_dirs()
+    df_dataset = pd.DataFrame({
+        "uid": df["cluster_id"],
+        "source_kind": "news",
+        "origin_file": os.path.abspath(os.path.join(OUT_DIR, "historical_top.csv")),
+        "cluster_id": df["cluster_id"],
+        "published_at": df["published_at"].str.replace("T"," ", regex=False).str.slice(0,19),
+        "headline": df["headline"],
+        "summary": "",  # sem resumo no GDELT / NewsAPI
+        "urls": df["url"],
+        "sources": df["source"],
+        "topics": df["topics"],
+        "tickers": df["tickers"],
+        "total": df["total"],
+        "decision": df["decision"],
+        "freshness": df["freshness"],
+        "authority": df["authority"],
+        "social_velocity": df["social_velocity"],
+        "engagement": df["engagement"],
+        "sentiment": df["sentiment"],
+        "brand_fit": df["brand_fit"],
+        "novelty": df["novelty"],
+        "trends_interest": None,
+        "trends_velocity": None
+    })
+
+    df_dataset.to_csv(DATASET_PATH, index=False, encoding="utf-8")
+    print(f"✅ Dataset salvo em {DATASET_PATH} (linhas: {len(df_dataset)})")
+    print(f"   Auxiliar salvo em {os.path.join(OUT_DIR,'historical_top.csv')}")
 
 if __name__ == "__main__":
     main()

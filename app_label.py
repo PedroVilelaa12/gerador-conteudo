@@ -62,8 +62,11 @@ def gist_get_labels() -> Optional[pd.DataFrame]:
     if not (GITHUB_TOKEN and GIST_ID and GIST_FILENAME):
         return None
     try:
-        r = requests.get(f"https://api.github.com/gists/{GIST_ID}",
-                         headers={"Authorization": f"token {GITHUB_TOKEN}"}, timeout=15)
+        r = requests.get(
+            f"https://api.github.com/gists/{GIST_ID}",
+            headers={"Authorization": f"token {GITHUB_TOKEN}"},
+            timeout=15
+        )
         r.raise_for_status()
         data = r.json()
         files = data.get("files", {})
@@ -84,9 +87,12 @@ def gist_save_labels(df: pd.DataFrame) -> bool:
     try:
         csv_text = df.to_csv(index=False)
         payload = {"files": {GIST_FILENAME: {"content": csv_text}}}
-        r = requests.patch(f"https://api.github.com/gists/{GIST_ID}",
-                           headers={"Authorization": f"token {GITHUB_TOKEN}"},
-                           data=json.dumps(payload), timeout=15)
+        r = requests.patch(
+            f"https://api.github.com/gists/{GIST_ID}",
+            headers={"Authorization": f"token {GITHUB_TOKEN}"},
+            data=json.dumps(payload),
+            timeout=15
+        )
         r.raise_for_status()
         return True
     except Exception as e:
@@ -208,6 +214,18 @@ def page_labeling(df: pd.DataFrame, labels: pd.DataFrame, backend: str):
     page_header()
     st.title("📝 Rotular conteúdos")
 
+    # --- RESET CONTROLADO (precisa acontecer ANTES de criar os widgets)
+    if st.session_state.get("reset_fields", False):
+        st.session_state["comment_box"] = ""
+        st.session_state["tags_box"] = ""
+        st.session_state["reset_fields"] = False
+
+    # --- Inicializa estados (uma vez) ANTES dos widgets
+    if "comment_box" not in st.session_state:
+        st.session_state["comment_box"] = ""
+    if "tags_box" not in st.session_state:
+        st.session_state["tags_box"] = ""
+
     df = normalize_uid(df)
 
     # Merge status
@@ -224,8 +242,13 @@ def page_labeling(df: pd.DataFrame, labels: pd.DataFrame, backend: str):
         min_dt, max_dt = (pd.to_datetime("2000-01-01"), pd.to_datetime("today"))
         if df["_dt"].notna().any():
             min_dt, max_dt = df["_dt"].min(), df["_dt"].max()
-        date_range = st.date_input("Intervalo de datas", value=(min_dt.date() if pd.notna(min_dt) else datetime(2000,1,1).date(),
-                                                               max_dt.date() if pd.notna(max_dt) else datetime.today().date()))
+        date_range = st.date_input(
+            "Intervalo de datas",
+            value=(
+                min_dt.date() if pd.notna(min_dt) else datetime(2000,1,1).date(),
+                max_dt.date() if pd.notna(max_dt) else datetime.today().date()
+            )
+        )
         source_filter = st.multiselect(
             "Fonte", sorted(list({str(x).split(" | ")[0] for x in merged.get("sources", []) if pd.notna(x)}))
         )
@@ -249,8 +272,7 @@ def page_labeling(df: pd.DataFrame, labels: pd.DataFrame, backend: str):
     if only_unlabeled:
         pool = pool[pool["label"].isna()]
     elif not show_labeled:
-        # mostra todos, mas dá prioridade aos não rotulados
-        pass
+        pass  # mostra todos, mas dá prioridade aos não rotulados
 
     # Counters
     total_base = len(df)
@@ -264,7 +286,8 @@ def page_labeling(df: pd.DataFrame, labels: pd.DataFrame, backend: str):
         return
 
     # Navigation state
-    if "idx" not in st.session_state: st.session_state.idx = 0
+    if "idx" not in st.session_state:
+        st.session_state.idx = 0
     st.session_state.idx = max(0, min(st.session_state.idx, len(pool)-1))
 
     def next_item():
@@ -296,8 +319,15 @@ def page_labeling(df: pd.DataFrame, labels: pd.DataFrame, backend: str):
 
         st.markdown("---")
         st.markdown("**Comentário (opcional)**")
-        comment = st.text_area("Por que sim/não? Qual o ângulo?", key="comment_box", placeholder="Opcional…")
-        tags = st.text_input("Etiquetas (opcional, separadas por vírgula)", key="tags_box")
+        comment = st.text_area(
+            "Por que sim/não? Qual o ângulo?",
+            key="comment_box",
+            placeholder="Opcional…"
+        )
+        tags = st.text_input(
+            "Etiquetas (opcional, separadas por vírgula)",
+            key="tags_box"
+        )
 
         st.markdown("#### Ações")
         c1, c2, c3, c4, c5 = st.columns([1,1,1,1,2])
@@ -309,8 +339,8 @@ def page_labeling(df: pd.DataFrame, labels: pd.DataFrame, backend: str):
                 "label": label_value.upper(),
                 "timestamp": ts,
                 "reviewer": reviewer or "revisor",
-                "comment": comment or "",
-                "tags": tags or ""
+                "comment": st.session_state.get("comment_box", "") or "",
+                "tags": st.session_state.get("tags_box", "") or ""
             }
             # replace if exists
             lab = labels.copy()
@@ -318,12 +348,16 @@ def page_labeling(df: pd.DataFrame, labels: pd.DataFrame, backend: str):
                 lab = lab[lab["uid"] != uid]
             lab = pd.concat([lab, pd.DataFrame([rec])], ignore_index=True)
             save_labels(lab, backend)
-            st.session_state.comment_box = ""
-            st.session_state.tags_box = ""
-            st.toast("Rótulo salvo!", icon="✅")
+
             # refresh cache-less variable
             st.session_state.labels_df = lab
+
+            # Limpeza na PRÓXIMA execução + avança item
+            st.session_state["reset_fields"] = True
             next_item()
+
+            st.toast("Rótulo salvo!", icon="✅")
+            st.rerun()
 
         with c1:
             if st.button("✅ Postar (1)", use_container_width=True):
@@ -337,6 +371,7 @@ def page_labeling(df: pd.DataFrame, labels: pd.DataFrame, backend: str):
         with c4:
             if st.button("⏭️ Pular (N)", use_container_width=True):
                 next_item()
+                st.rerun()
         with c5:
             st.write("")
             st.write("")
@@ -344,7 +379,7 @@ def page_labeling(df: pd.DataFrame, labels: pd.DataFrame, backend: str):
 
         st.caption("Atalhos: **1** = Postar, **2** = Monitorar, **3** = Não postar, **N** = Pular")
 
-        # Keyboard shortcuts (same trick as seu app)
+        # Keyboard shortcuts
         st.markdown("""
         <script>
         document.addEventListener('keydown', function(e) {
@@ -477,7 +512,7 @@ def main():
     if "labels_df" not in st.session_state:
         st.session_state.labels_df = labels_df
     else:
-        # If backend has newer version (rare), you could reconcile here.
+        # If backend has newer version (rare), you could reconcile aqui.
         pass
 
     # Pages

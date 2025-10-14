@@ -283,14 +283,13 @@ def build_query(domains: List[str], languages: List[str], free_text: Optional[st
         if doms:
             parts.append(" OR ".join([f'domain:{d}' for d in doms]))
     if languages:
-        # GDELT usa "sourceCountry:" e "lang:" (lang:por/eng/esp...). Vamos usar lang:
-        langs = " OR ".join([f"lang:{l}" for l in languages])
+        # troque 'lang:' por 'sourcelang:' e aceite nomes
+        langs = " OR ".join([f'sourcelang:{l.strip().capitalize()}' for l in languages if l.strip()])
         parts.append(f"({langs})")
     if free_text:
         parts.append(f"({free_text})")
-    if not parts:
-        return ""
-    return " AND ".join(parts)
+    return " AND ".join(parts) if parts else ""
+
 
 # =========================
 # Coleta: NewsAPI (opcional)
@@ -463,6 +462,7 @@ def main():
 
     # --------- Salvar CSVs auxiliares + dataset ---------
     os.makedirs(OUT_DIR, exist_ok=True)
+
     df = pd.DataFrame([{
         "cluster_id": r.cluster_id,
         "published_at": r.published_at.isoformat(),
@@ -482,20 +482,24 @@ def main():
         "decision": r.decision
     } for r in items])
 
+    # Auxiliares (mantém como antes)
     df.to_csv(os.path.join(OUT_DIR, "historical_top.csv"), index=False)
-    # decisions-like
-    df_dec = df[["cluster_id","freshness","authority","social_velocity","engagement","sentiment","brand_fit","novelty","total","decision"]]
+    df_dec = df[[
+        "cluster_id","freshness","authority","social_velocity",
+        "engagement","sentiment","brand_fit","novelty","total","decision"
+    ]]
     df_dec.to_csv(os.path.join(OUT_DIR, "decisions.csv"), index=False)
 
     # ===== Dataset labeling/to_label.csv =====
-    # Monta no mesmo esquema que seu app espera (campos principais)
+    # Monta no mesmo esquema que o app espera (campos principais)
     ensure_dirs()
-    df_dataset = pd.DataFrame({
+    new_df = pd.DataFrame({
         "uid": df["cluster_id"],
         "source_kind": "news",
         "origin_file": os.path.abspath(os.path.join(OUT_DIR, "historical_top.csv")),
         "cluster_id": df["cluster_id"],
-        "published_at": df["published_at"].str.replace("T"," ", regex=False).str.slice(0,19),
+        # published_at no formato "YYYY-MM-DD HH:MM:SS"
+        "published_at": df["published_at"].str.replace("T", " ", regex=False).str.slice(0, 19),
         "headline": df["headline"],
         "summary": "",  # sem resumo no GDELT / NewsAPI
         "urls": df["url"],
@@ -515,8 +519,55 @@ def main():
         "trends_velocity": None
     })
 
-    df_dataset.to_csv(DATASET_PATH, index=False, encoding="utf-8")
-    print(f"✅ Dataset salvo em {DATASET_PATH} (linhas: {len(df_dataset)})")
+    # === Mescla com o dataset existente (sem perder dados) ===
+    merged: pd.DataFrame
+    if os.path.exists(DATASET_PATH):
+        try:
+            old_df = pd.read_csv(DATASET_PATH)
+        except Exception:
+            old_df = pd.DataFrame()
+
+        # Garante mesmas colunas entre old e new (preenche com None quando faltar)
+        for col in new_df.columns:
+            if col not in old_df.columns:
+                old_df[col] = None
+        for col in old_df.columns:
+            if col not in new_df.columns:
+                new_df[col] = None
+
+        merged = pd.concat([old_df[new_df.columns], new_df], ignore_index=True)
+    else:
+        merged = new_df.copy()
+
+    # Normaliza published_at para data, quando possível
+    def _to_dt(x):
+        try:
+            return pd.to_datetime(x, errors="coerce")
+        except Exception:
+            return pd.NaT
+
+    if "published_at" in merged.columns:
+        merged["_dt"] = merged["published_at"].apply(_to_dt)
+    else:
+        merged["_dt"] = pd.NaT
+
+    # 1) remove duplicatas exatas por (headline, urls)
+    if {"headline", "urls"}.issubset(merged.columns):
+        merged = merged.drop_duplicates(subset=["headline", "urls"], keep="last")
+
+    # 2) dedup por uid (mantém o mais recente por published_at)
+    if "uid" in merged.columns:
+        merged = merged.sort_values(by=["uid", "_dt"], na_position="last").drop_duplicates(subset=["uid"], keep="last")
+
+    # limpa coluna auxiliar
+    merged = merged.drop(columns=["_dt"], errors="ignore")
+
+    # Escrita atômica
+    tmp_path = DATASET_PATH + ".tmp"
+    merged.to_csv(tmp_path, index=False, encoding="utf-8")
+    os.replace(tmp_path, DATASET_PATH)
+
+    print(f"✅ Dataset atualizado/mesclado em {DATASET_PATH} (linhas: {len(merged)})")
     print(f"   Auxiliar salvo em {os.path.join(OUT_DIR,'historical_top.csv')}")
 
 if __name__ == "__main__":

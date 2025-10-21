@@ -100,6 +100,20 @@ def instalar_dependencias_opcionais():
     
     return True
 
+def instalar_dependencias_sistema():
+    """Instalar grupos de dependências do sistema de automação"""
+    print("📦 Instalando dependências do sistema de automação...")
+    
+    grupos = ["ai", "web", "database"]
+    for grupo in grupos:
+        print(f"🔄 Instalando grupo '{grupo}'...")
+        if executar_comando(f"poetry install --with {grupo}", f"Instalação do grupo {grupo}"):
+            print(f"✅ Grupo '{grupo}' instalado")
+        else:
+            print(f"⚠️  Grupo '{grupo}' não pôde ser instalado")
+    
+    return True
+
 def configurar_git_hooks():
     """Configurar git hooks se git estiver disponível"""
     if not shutil.which("git"):
@@ -154,30 +168,38 @@ def mostrar_proximos_passos():
     print("1. Ativar ambiente Poetry:")
     print("   poetry shell")
     
-    print("\n2. Executar POC de exemplo:")
+    print("\n2. Executar Sistema de Automação de Conteúdo:")
+    print("   poetry run python scripts/run_streamlit.py")
+    print("   Acesse: http://localhost:8501")
+    
+    print("\n3. Executar POC de exemplo:")
     print("   poetry run python scripts/run_poc.py exemplo_poc")
     print("   ou")
     print("   poetry run run-poc exemplo_poc")
     
-    print("\n3. Listar POCs disponíveis:")
+    print("\n4. Listar POCs disponíveis:")
     print("   poetry run python scripts/run_poc.py")
     
-    print("\n4. Executar testes:")
+    print("\n5. Executar testes:")
     print("   poetry run pytest")
     
-    print("\n5. Criar nova POC:")
+    print("\n6. Criar nova POC:")
     print("   cp pocs/template_poc.py pocs/minha_nova_poc.py")
     
-    print("\n6. Adicionar novas dependências:")
+    print("\n7. Adicionar novas dependências:")
     print("   poetry add nome-da-biblioteca")
     print("   poetry add --group dev nome-da-biblioteca-dev")
+    print("   poetry add --group ai openai")
+    print("   poetry add --group web streamlit")
     
-    print("\n7. Atualizar dependências:")
+    print("\n8. Atualizar dependências:")
     print("   poetry update")
     
-    print("\n📚 Documentação completa no README.md")
+    print("\n📚 Documentação completa no README_COMPLETO.md")
     print("🔧 Configurações em pyproject.toml")
+    print("🔑 Configure suas APIs no arquivo .env")
     print("\n💡 Dica: Use 'poetry run' antes dos comandos ou 'poetry shell' para ativar o ambiente!")
+    print("\n🚀 Sistema de Automação de Conteúdo pronto para uso!")
 
 def main():
     """Função principal"""
@@ -201,6 +223,9 @@ def main():
     
     # Instalação de dependências opcionais
     instalar_dependencias_opcionais()
+    
+    # Instalação de dependências específicas do sistema
+    instalar_dependencias_sistema()
     
     # Configuração de git hooks
     if not configurar_git_hooks():

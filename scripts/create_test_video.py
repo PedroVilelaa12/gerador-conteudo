@@ -29,7 +29,7 @@ def create_test_video(output_path: str = "test_video.mp4", duration: int = 10):
     """
     
     if not check_ffmpeg():
-        print("❌ FFmpeg não encontrado!")
+        print("ERRO: FFmpeg não encontrado!")
         print("   Instale o FFmpeg:")
         print("   - Windows: https://ffmpeg.org/download.html")
         print("   - ou use: winget install ffmpeg")
@@ -62,7 +62,7 @@ def create_test_video(output_path: str = "test_video.mp4", duration: int = 10):
             output_path
         ]
         
-        print(f"🎬 Criando vídeo de teste: {output_path}")
+        print(f"Criando vídeo de teste: {output_path}")
         print(f"   Duração: {duration} segundos")
         print(f"   Resolução: 1080x1920 (9:16)")
         
@@ -70,23 +70,23 @@ def create_test_video(output_path: str = "test_video.mp4", duration: int = 10):
         
         if result.returncode == 0:
             file_size = os.path.getsize(output_path) / (1024 * 1024)  # MB
-            print(f"✅ Vídeo criado com sucesso!")
+            print(f"OK: Vídeo criado com sucesso!")
             print(f"   Arquivo: {os.path.abspath(output_path)}")
             print(f"   Tamanho: {file_size:.1f} MB")
             return True
         else:
-            print(f"❌ Erro ao criar vídeo:")
+            print(f"ERRO ao criar vídeo:")
             print(f"   {result.stderr}")
             return False
             
     except Exception as e:
-        print(f"❌ Erro inesperado: {e}")
+        print(f"ERRO inesperado: {e}")
         return False
 
 
 def main():
     """Função principal"""
-    print("🎥 GERADOR DE VÍDEO DE TESTE")
+    print("GERADOR DE VÍDEO DE TESTE")
     print("=" * 40)
     
     # Diretório de saída
@@ -111,19 +111,19 @@ def main():
     
     for video in videos:
         output_path = output_dir / video["name"]
-        print(f"\n📹 Criando {video['description']}...")
+        print(f"\nCriando {video['description']}...")
         
         if create_test_video(str(output_path), video["duration"]):
             success_count += 1
         else:
             print(f"   Falha ao criar {video['name']}")
     
-    print(f"\n📊 RESUMO:")
+    print(f"\nRESUMO:")
     print(f"   Vídeos criados: {success_count}/{len(videos)}")
     
     if success_count > 0:
-        print(f"\n📁 Vídeos salvos em: {output_dir.absolute()}")
-        print("\n💡 PRÓXIMOS PASSOS:")
+        print(f"\nVídeos salvos em: {output_dir.absolute()}")
+        print("\nPRÓXIMOS PASSOS:")
         print("   1. Configure o arquivo .env com as credenciais das APIs")
         print("   2. Para Instagram: hospede um vídeo publicamente e configure TEST_VIDEO_URL")
         print("   3. Configure TEST_VIDEO_PATH no .env apontando para um dos vídeos criados")

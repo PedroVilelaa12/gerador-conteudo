@@ -7,8 +7,12 @@ Data: 2024
 """
 
 import re
+import logging
 from typing import Any, Dict
-from template_poc import POCTemplate
+from pocs.template_poc import POCTemplate
+
+# Configurar logging
+logger = logging.getLogger(__name__)
 
 
 class CPFValidatorPOC(POCTemplate):
@@ -121,7 +125,7 @@ def main():
             print(f"\nCPFs validados: {result['data']['cpfs_validados']}")
             print("Resultados:")
             for cpf, valido in result['data']['resultados'].items():
-                status = "✅ VÁLIDO" if valido else "❌ INVÁLIDO"
+                status = "VÁLIDO" if valido else "INVÁLIDO"
                 print(f"  {cpf}: {status}")
         
     except Exception as e:

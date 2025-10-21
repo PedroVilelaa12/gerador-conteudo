@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 def test_tiktok_connection():
     """Testar conexão com TikTok API"""
     print("\n" + "="*50)
-    print("🎵 TESTANDO CONEXÃO COM TIKTOK")
+    print("TESTANDO CONEXÃO COM TIKTOK")
     print("="*50)
     
     try:
@@ -30,23 +30,23 @@ def test_tiktok_connection():
         
         # Testar apenas a configuração
         if poc.setup():
-            print("✅ Configuração do TikTok: OK")
+            print("OK: Configuração do TikTok")
             
             # Testar obtenção de informações do usuário
             user_info = poc.get_user_info()
             if user_info and "data" in user_info:
-                print(f"✅ Usuário conectado: {user_info['data'].get('display_name', 'N/A')}")
+                print(f"OK: Usuário conectado: {user_info['data'].get('display_name', 'N/A')}")
                 print(f"   Username: @{user_info['data'].get('username', 'N/A')}")
                 return True
             else:
-                print("❌ Falha ao obter informações do usuário")
+                print("ERRO: Falha ao obter informações do usuário")
                 return False
         else:
-            print("❌ Falha na configuração do TikTok")
+            print("ERRO: Falha na configuração do TikTok")
             return False
             
     except Exception as e:
-        print(f"❌ Erro no teste do TikTok: {e}")
+        print(f"ERRO no teste do TikTok: {e}")
         return False
     finally:
         if 'poc' in locals():
@@ -56,7 +56,7 @@ def test_tiktok_connection():
 def test_instagram_connection():
     """Testar conexão com Instagram API"""
     print("\n" + "="*50)
-    print("📸 TESTANDO CONEXÃO COM INSTAGRAM")
+    print("TESTANDO CONEXÃO COM INSTAGRAM")
     print("="*50)
     
     try:
@@ -64,24 +64,24 @@ def test_instagram_connection():
         
         # Testar apenas a configuração
         if poc.setup():
-            print("✅ Configuração do Instagram: OK")
+            print("OK: Configuração do Instagram")
             
             # Testar obtenção de informações da conta
             account_info = poc.get_account_info()
             if account_info and "username" in account_info:
-                print(f"✅ Conta conectada: @{account_info.get('username', 'N/A')}")
+                print(f"OK: Conta conectada: @{account_info.get('username', 'N/A')}")
                 print(f"   Nome: {account_info.get('name', 'N/A')}")
                 print(f"   Tipo: {account_info.get('account_type', 'N/A')}")
                 return True
             else:
-                print("❌ Falha ao obter informações da conta")
+                print("ERRO: Falha ao obter informações da conta")
                 return False
         else:
-            print("❌ Falha na configuração do Instagram")
+            print("ERRO: Falha na configuração do Instagram")
             return False
             
     except Exception as e:
-        print(f"❌ Erro no teste do Instagram: {e}")
+        print(f"ERRO no teste do Instagram: {e}")
         return False
     finally:
         if 'poc' in locals():
@@ -90,13 +90,13 @@ def test_instagram_connection():
 
 def main():
     """Função principal para testar todas as conexões"""
-    print("🚀 TESTE DE CONEXÕES COM APIS DE REDES SOCIAIS")
+    print("TESTE DE CONEXÕES COM APIS DE REDES SOCIAIS")
     print("=" * 60)
     
     # Verificar se o arquivo .env existe
     env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
     if not os.path.exists(env_path):
-        print("⚠️  ATENÇÃO: Arquivo .env não encontrado!")
+        print("ATENÇÃO: Arquivo .env não encontrado!")
         print("   Copie o arquivo env.example para .env e configure suas credenciais")
         print(f"   Caminho esperado: {env_path}")
         return
@@ -114,19 +114,19 @@ def main():
     
     # Resumo final
     print("\n" + "="*50)
-    print("📊 RESUMO DOS TESTES")
+    print("RESUMO DOS TESTES")
     print("="*50)
     
-    print(f"TikTok API: {'✅ CONECTADO' if results['tiktok'] else '❌ FALHOU'}")
-    print(f"Instagram API: {'✅ CONECTADO' if results['instagram'] else '❌ FALHOU'}")
+    print(f"TikTok API: {'CONECTADO' if results['tiktok'] else 'FALHOU'}")
+    print(f"Instagram API: {'CONECTADO' if results['instagram'] else 'FALHOU'}")
     
     if all(results.values()):
-        print("\n🎉 Todas as APIs estão funcionando!")
+        print("\nTodas as APIs estão funcionando!")
         print("   Você pode executar os scripts de upload:")
         print("   - python pocs/tiktok_poc.py")
         print("   - python pocs/instagram_poc.py")
     else:
-        print("\n⚠️  Algumas APIs falharam.")
+        print("\nAlgumas APIs falharam.")
         print("   Verifique as credenciais no arquivo .env")
         print("   Consulte SETUP_APIS.md para mais informações")
 

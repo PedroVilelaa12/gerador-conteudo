@@ -648,5 +648,12 @@ def show_settings():
         st.metric("Métricas Coletadas", len(st.session_state.metrics_data))
         st.metric("Versão", "1.0.0")
 
+    st.markdown("---")
+    st.markdown("### 📄 Documentos Legais")
+    st.markdown("""
+    - [Termos de Serviço](https://niceasvini.github.io/termos.html)
+    - [Política de Privacidade](https://niceasvini.github.io/privacidade.html)
+    """)
+
 if __name__ == "__main__":
     main()

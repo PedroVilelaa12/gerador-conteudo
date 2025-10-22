@@ -9,16 +9,21 @@ gerador-conteudo/
 ├── pocs/                    # Diretório das POCs
 │   ├── __init__.py
 │   ├── template_poc.py     # Template base para novas POCs
-│   └── exemplo_poc.py      # Exemplo de POC (validador de CPF)
+│   ├── exemplo_poc.py      # Exemplo de POC (validador de CPF)
+│   ├── tiktok_poc.py       # POC para upload no TikTok
+│   └── instagram_poc.py    # POC para upload no Instagram
 ├── tests/                   # Testes automatizados
 │   ├── __init__.py
 │   └── test_exemplo_poc.py
 ├── scripts/                 # Scripts utilitários
 │   ├── __init__.py
-│   └── run_poc.py          # Script para executar POCs
+│   ├── run_poc.py          # Script para executar POCs
+│   ├── test_social_apis.py # Testar conexões com APIs
+│   └── create_test_video.py # Criar vídeos de teste
 ├── pyproject.toml           # Configuração Poetry
 ├── poetry.lock              # Lock de dependências
 ├── env.example              # Exemplo de variáveis de ambiente
+├── SETUP_APIS.md           # Guia para configurar APIs
 └── README.md                # Este arquivo
 ```
 
@@ -64,6 +69,35 @@ cp env.example .env
 
 # Editar .env com suas configurações
 ```
+
+## 🎬 POCs de Redes Sociais
+
+Este projeto inclui POCs para upload automático de vídeos em redes sociais:
+
+### 🎵 TikTok POC
+```bash
+# Executar upload no TikTok
+poetry run python pocs/tiktok_poc.py
+```
+
+### 📸 Instagram POC  
+```bash
+# Executar upload no Instagram
+poetry run python pocs/instagram_poc.py
+```
+
+### 🔧 Configuração das APIs
+1. **Leia o guia completo**: `SETUP_APIS.md`
+2. **Configure credenciais**: Copie `env.example` para `.env` e configure as variáveis
+3. **Teste conexões**: `poetry run python scripts/test_social_apis.py`
+4. **Crie vídeos de teste**: `poetry run python scripts/create_test_video.py`
+
+### 📋 Pré-requisitos para Redes Sociais
+- Conta de desenvolvedor no TikTok e Meta/Facebook
+- Aplicações registradas nas respectivas plataformas
+- Tokens de acesso válidos
+- Vídeo de teste (criado automaticamente ou próprio)
+- FFmpeg instalado (para criar vídeos de teste)
 
 ## 🚀 Como Usar
 
@@ -173,6 +207,7 @@ poetry add --group automation selenium
 - **data**: pandas, numpy
 - **api**: fastapi, uvicorn
 - **automation**: selenium, beautifulsoup4
+- **social**: requests, python-dotenv, pillow (para APIs de redes sociais)
 
 ### Atualizar dependências
 ```bash

@@ -18,7 +18,7 @@ classifiers = [
 ]
 
 [tool.poetry.dependencies]
-python = "^3.8"
+python = ">=3.9,<3.9.7 || >3.9.7,<3.14"
 requests = "^2.31.0"
 python-dotenv = "^1.0.0"
 
@@ -30,7 +30,6 @@ mypy = "^1.5.0"
 
 [tool.poetry.group.data.dependencies]
 pandas = "^2.0.0"
-numpy = "^1.24.0"
 
 [tool.poetry.group.api.dependencies]
 fastapi = "^0.100.0"
@@ -39,6 +38,28 @@ uvicorn = "^0.23.0"
 [tool.poetry.group.automation.dependencies]
 selenium = "^4.15.0"
 beautifulsoup4 = "^4.12.0"
+
+[tool.poetry.group.social.dependencies]
+# Dependências para APIs de redes sociais
+requests = "^2.31.0"
+python-dotenv = "^1.0.0"
+
+[tool.poetry.group.ai.dependencies]
+# Dependências para IA e geração de conteúdo
+openai = "^1.0.0"
+pillow = "^10.0.0"
+opencv-python = "^4.8.0"
+moviepy = "^1.0.3"
+
+[tool.poetry.group.web.dependencies]
+# Dependências para interface web
+streamlit = "^1.28.0"
+plotly = "^5.17.0"
+boto3 = "^1.34.0"
+
+[tool.poetry.group.database.dependencies]
+# Dependências para banco de dados
+sqlalchemy = "^2.0.0"
 
 [tool.poetry.scripts]
 run-poc = "scripts.run_poc:main"

@@ -32,21 +32,21 @@ def executar_poc(nome_poc):
         
         # Verificar se tem função main
         if hasattr(modulo, 'main'):
-            print(f"🚀 Executando POC: {nome_poc}")
+            print(f"Executando POC: {nome_poc}")
             print("=" * 50)
             modulo.main()
         else:
-            print(f"❌ POC {nome_poc} não tem função main()")
+            print(f"ERRO: POC {nome_poc} não tem função main()")
             
     except ImportError as e:
-        print(f"❌ Erro ao importar POC {nome_poc}: {e}")
+        print(f"ERRO ao importar POC {nome_poc}: {e}")
     except Exception as e:
-        print(f"❌ Erro ao executar POC {nome_poc}: {e}")
+        print(f"ERRO ao executar POC {nome_poc}: {e}")
 
 def main():
     """Função principal"""
     if len(sys.argv) < 2:
-        print("📋 POCs disponíveis:")
+        print("POCs disponíveis:")
         pocs = listar_pocs()
         
         if not pocs:
@@ -55,7 +55,7 @@ def main():
             for i, poc in enumerate(pocs, 1):
                 print(f"   {i}. {poc}")
         
-        print("\n💡 Uso: python scripts/run_poc.py [nome_da_poc]")
+        print("\nUso: python scripts/run_poc.py [nome_da_poc]")
         print("   Exemplo: python scripts/run_poc.py exemplo_poc")
         return
     
@@ -64,7 +64,7 @@ def main():
     # Verificar se a POC existe
     pocs = listar_pocs()
     if nome_poc not in pocs:
-        print(f"❌ POC '{nome_poc}' não encontrada")
+        print(f"ERRO: POC '{nome_poc}' não encontrada")
         print(f"POCs disponíveis: {', '.join(pocs)}")
         return
     

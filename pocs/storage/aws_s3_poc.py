@@ -39,7 +39,7 @@ class AWSS3POC(POCTemplate):
             # Carregar credenciais do ambiente
             self.access_key = os.getenv('AWS_ACCESS_KEY_ID')
             self.secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
-            self.bucket_name = os.getenv('S3_BUCKET_NAME')
+            self.bucket_name = os.getenv('S3_BUCKET_NAME') or os.getenv('AWS_BUCKET_NAME')
             self.region = os.getenv('AWS_REGION', 'us-east-1')
             
             if not self.access_key:
@@ -107,16 +107,24 @@ class AWSS3POC(POCTemplate):
             if content_type:
                 extra_args['ContentType'] = content_type
             
-            if make_public:
+            allow_acl = os.getenv("AWS_ALLOW_ACL", "false").lower() == "true"
+            if make_public and allow_acl:
                 extra_args['ACL'] = 'public-read'
             
             # Fazer upload
-            self.s3_client.upload_file(
-                file_path, 
-                self.bucket_name, 
-                s3_key,
-                ExtraArgs=extra_args
-            )
+            if extra_args:
+                self.s3_client.upload_file(
+                    file_path, 
+                    self.bucket_name, 
+                    s3_key,
+                    ExtraArgs=extra_args
+                )
+            else:
+                self.s3_client.upload_file(
+                    file_path, 
+                    self.bucket_name, 
+                    s3_key
+                )
             
             # Gerar URL pública
             public_url = f"https://{self.bucket_name}.s3.{self.region}.amazonaws.com/{s3_key}"
@@ -151,16 +159,24 @@ class AWSS3POC(POCTemplate):
             if content_type:
                 extra_args['ContentType'] = content_type
             
-            if make_public:
+            allow_acl = os.getenv("AWS_ALLOW_ACL", "false").lower() == "true"
+            if make_public and allow_acl:
                 extra_args['ACL'] = 'public-read'
             
             # Fazer upload
-            self.s3_client.put_object(
-                Bucket=self.bucket_name,
-                Key=s3_key,
-                Body=data,
-                **extra_args
-            )
+            if extra_args:
+                self.s3_client.put_object(
+                    Bucket=self.bucket_name,
+                    Key=s3_key,
+                    Body=data,
+                    **extra_args
+                )
+            else:
+                self.s3_client.put_object(
+                    Bucket=self.bucket_name,
+                    Key=s3_key,
+                    Body=data
+                )
             
             # Gerar URL pública
             public_url = f"https://{self.bucket_name}.s3.{self.region}.amazonaws.com/{s3_key}"

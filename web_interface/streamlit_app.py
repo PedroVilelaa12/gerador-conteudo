@@ -11,8 +11,11 @@ import os
 import sys
 import json
 import logging
+import mimetypes
+import shutil
+import subprocess
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pathlib import Path
 import plotly.express as px
 import plotly.graph_objects as go
@@ -179,7 +182,8 @@ def generate_content(gemini_poc, prompt: str, size: str, quality: str, style: st
                         "filepath": filepath,
                         "filename": filename,
                         "created_at": datetime.now().isoformat(),
-                        "status": "pending_approval"
+                        "status": "pending_approval",
+                        "media_type": "IMAGE"
                     }
                     
                     st.session_state.generated_content.append(content_data)
@@ -203,13 +207,14 @@ def generate_content(gemini_poc, prompt: str, size: str, quality: str, style: st
         logger.exception("Exceção ao gerar conteúdo")
         return None
 
-def upload_to_storage(s3_poc, filepath: str, filename: str):
+def upload_to_storage(s3_poc, filepath: str, filename: str, make_public: bool = True) -> Optional[str]:
     """Upload para armazenamento em nuvem ou local"""
     if s3_poc:
         # Usar S3 se configurado
         try:
-            s3_key = f"content/{filename}"
-            result = s3_poc.upload_file(filepath, s3_key, "image/png")
+            s3_key = f"instagram/{filename}"
+            content_type, _ = mimetypes.guess_type(filepath)
+            result = s3_poc.upload_file(filepath, s3_key, content_type=content_type, make_public=make_public)
             
             if result["status"] == "success":
                 return result["data"]["public_url"]
@@ -233,7 +238,118 @@ def upload_to_storage(s3_poc, filepath: str, filename: str):
             st.error(f"Erro no armazenamento local: {e}")
             return None
 
-def publish_to_social_media(platform: str, content_data: Dict, tiktok_poc, instagram_poc, linkedin_poc):
+
+def ensure_media_type(content: Dict[str, Any]) -> str:
+    """Determinar o tipo de mídia (IMAGE ou VIDEO)"""
+    if content.get("media_type"):
+        return content["media_type"]
+    
+    filepath = content.get("filepath") or ""
+    ext = os.path.splitext(filepath)[1].lower()
+    video_exts = {'.mp4', '.mov', '.webm', '.avi', '.mkv'}
+    image_exts = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
+    
+    if ext in video_exts:
+        content["media_type"] = "VIDEO"
+    elif ext in image_exts:
+        content["media_type"] = "IMAGE"
+    else:
+        content["media_type"] = "IMAGE"
+    return content["media_type"]
+
+
+def normalize_video_for_instagram(filepath: str) -> str:
+    """Reencodar vídeo para atender aos requisitos do Instagram"""
+    ffmpeg_path = shutil.which("ffmpeg")
+    if not ffmpeg_path:
+        st.warning("⚠️ FFmpeg não encontrado no sistema. Pulando normalização de vídeo.")
+        return filepath
+
+    input_path = Path(filepath)
+    output_path = input_path.with_name(f"{input_path.stem}_ig.mp4")
+
+    cmd = [
+        ffmpeg_path,
+        "-y",
+        "-i", str(input_path),
+        "-vf", "scale='min(1080,iw)':-2",
+        "-c:v", "libx264",
+        "-profile:v", "high",
+        "-level", "4.0",
+        "-pix_fmt", "yuv420p",
+        "-b:v", "4M",
+        "-maxrate", "4M",
+        "-bufsize", "8M",
+        "-r", "30",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-ar", "48000",
+        "-movflags", "+faststart",
+        str(output_path)
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        logger.info("Vídeo normalizado para Instagram: %s", output_path)
+    except subprocess.CalledProcessError as exc:
+        st.error("❌ Erro ao normalizar vídeo com FFmpeg.")
+        logger.error("FFmpeg stdout: %s", exc.stdout)
+        logger.error("FFmpeg stderr: %s", exc.stderr)
+        return filepath
+
+    try:
+        from moviepy.editor import VideoFileClip
+        with VideoFileClip(str(output_path)) as clip:
+            duration = clip.duration or 0
+        if duration < 3:
+            st.warning("⚠️ Vídeo tem menos de 3 segundos. O Instagram pode recusar o upload.")
+        elif duration > 90:
+            st.warning("⚠️ Vídeo tem mais de 90 segundos. O Instagram pode recusar o upload.")
+    except Exception as exc:
+        logger.warning("Não foi possível validar duração do vídeo: %s", exc)
+
+    return str(output_path)
+
+
+def ensure_public_media_url(content: Dict[str, Any], s3_poc, make_public: bool = True) -> Optional[str]:
+    """Garantir que exista uma URL pública para a mídia"""
+    if content.get("public_url"):
+        return content["public_url"]
+    
+    filepath = content.get("filepath")
+    filename = content.get("filename") or (os.path.basename(filepath) if filepath else None)
+    
+    if not filepath or not filename:
+        return None
+    
+    if not os.path.exists(filepath):
+        absolute = os.path.abspath(filepath)
+        if os.path.exists(absolute):
+            filepath = absolute
+        else:
+            return None
+    
+    media_type = ensure_media_type(content)
+    if media_type == "VIDEO":
+        prepared_path = content.get("instagram_prepared_path")
+        if not prepared_path:
+            prepared_path = normalize_video_for_instagram(filepath)
+            content["instagram_prepared_path"] = prepared_path
+        filepath = prepared_path
+        filename = Path(filepath).name
+        content["filepath"] = filepath
+        content["filename"] = filename
+
+    if not s3_poc:
+        return None
+    
+    url = upload_to_storage(s3_poc, filepath, filename, make_public=make_public)
+    if url:
+        content["public_url"] = url
+    return url
+
+
+def publish_to_social_media(platform: str, content_data: Dict, tiktok_poc, instagram_poc, linkedin_poc, s3_poc=None):
     """Publicar em rede social"""
     try:
         if platform == "tiktok" and tiktok_poc:
@@ -307,8 +423,31 @@ def publish_to_social_media(platform: str, content_data: Dict, tiktok_poc, insta
             else:
                 return {"status": "error", "message": "Nenhum arquivo ou URL disponível para TikTok"}
         elif platform == "instagram" and instagram_poc:
-            # Configurar para Instagram
-            result = instagram_poc.run()
+            media_type = ensure_media_type(content_data)
+            caption_sources = [
+                content_data.get("custom_description"),
+                content_data.get("post_text"),
+                content_data.get("revised_prompt"),
+                content_data.get("prompt")
+            ]
+            caption_parts = [text for text in caption_sources if text]
+            hashtags = content_data.get("hashtags")
+            if hashtags:
+                caption_parts.append(hashtags)
+            caption = "\n\n".join(caption_parts) if caption_parts else ""
+
+            public_url = content_data.get("public_url")
+            if not public_url:
+                public_url = ensure_public_media_url(content_data, s3_poc)
+
+            if not public_url:
+                return {"status": "error", "message": "Não foi possível obter URL pública para o Instagram. Configure o S3 nas variáveis de ambiente."}
+
+            result = instagram_poc.run(
+                media_url=public_url,
+                media_type=media_type,
+                caption=caption
+            )
         elif platform == "linkedin" and linkedin_poc:
             # Publicar no LinkedIn
             # Prioridade: custom_description > post_text > revised_prompt > prompt
@@ -638,7 +777,7 @@ def show_content_approval(tiktok_poc, instagram_poc, linkedin_poc, s3_poc):
                         
                         if publish_tiktok:
                             with st.spinner("📤 Publicando no TikTok (modo Sandbox - usando GitHub Pages)..."):
-                                result = publish_to_social_media("tiktok", content, tiktok_poc, instagram_poc, linkedin_poc)
+                                result = publish_to_social_media("tiktok", content, tiktok_poc, instagram_poc, linkedin_poc, s3_poc)
                                 if result["status"] == "success":
                                     published_platforms.append("tiktok")
                                     st.success("✅ Publicado no TikTok com sucesso!")
@@ -649,12 +788,12 @@ def show_content_approval(tiktok_poc, instagram_poc, linkedin_poc, s3_poc):
                                     st.error(f"❌ Erro ao publicar no TikTok: {result.get('message', 'Erro desconhecido')}")
                         
                         if publish_instagram:
-                            result = publish_to_social_media("instagram", content, tiktok_poc, instagram_poc, linkedin_poc)
+                            result = publish_to_social_media("instagram", content, tiktok_poc, instagram_poc, linkedin_poc, s3_poc)
                             if result["status"] == "success":
                                 published_platforms.append("instagram")
                         
                         if publish_linkedin:
-                            result = publish_to_social_media("linkedin", content, tiktok_poc, instagram_poc, linkedin_poc)
+                            result = publish_to_social_media("linkedin", content, tiktok_poc, instagram_poc, linkedin_poc, s3_poc)
                             if result["status"] == "success":
                                 published_platforms.append("linkedin")
                         

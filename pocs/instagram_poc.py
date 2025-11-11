@@ -33,10 +33,11 @@ class InstagramUploadPOC(POCTemplate):
         self.instagram_account_id = None
         self.base_url = "https://graph.facebook.com/v18.0"
         
-        # Configurações do vídeo de teste
-        self.video_path = None
-        self.video_caption = "Teste de upload automático via API do Instagram 🚀 #teste #api"
-        self.video_url = None  # URL pública do vídeo (necessária para Instagram API)
+        # Configurações padrão
+        self.media_caption = os.getenv("INSTAGRAM_MEDIA_CAPTION", "Teste de upload automático via API do Instagram 🚀 #teste #api")
+        self.default_media_type = os.getenv("INSTAGRAM_MEDIA_TYPE", "VIDEO").upper()
+        self.default_video_url = os.getenv('INSTAGRAM_VIDEO_URL')
+        self.default_image_url = os.getenv('INSTAGRAM_IMAGE_URL')
     
     def setup(self) -> bool:
         """Configurar conexão com Instagram API"""
@@ -46,8 +47,6 @@ class InstagramUploadPOC(POCTemplate):
             # Carregar credenciais do ambiente
             self.access_token = os.getenv('INSTAGRAM_ACCESS_TOKEN')
             self.instagram_account_id = os.getenv('INSTAGRAM_ACCOUNT_ID')
-            self.video_path = os.getenv('TEST_VIDEO_PATH', 'test_video.mp4')
-            self.video_url = os.getenv('TEST_VIDEO_URL')  # URL pública do vídeo
             
             if not self.access_token:
                 logger.error("INSTAGRAM_ACCESS_TOKEN não encontrado nas variáveis de ambiente")
@@ -56,14 +55,6 @@ class InstagramUploadPOC(POCTemplate):
             if not self.instagram_account_id:
                 logger.error("INSTAGRAM_ACCOUNT_ID não encontrado nas variáveis de ambiente")
                 return False
-            
-            if not self.video_url:
-                logger.error("TEST_VIDEO_URL não encontrado. Instagram API requer URL pública do vídeo")
-                return False
-            
-            # Verificar se o arquivo de vídeo existe localmente (opcional, para referência)
-            if self.video_path and not os.path.exists(self.video_path):
-                logger.warning(f"Arquivo de vídeo local não encontrado: {self.video_path}")
             
             logger.info("Configuração do Instagram concluída com sucesso")
             return True
@@ -77,7 +68,7 @@ class InstagramUploadPOC(POCTemplate):
         try:
             url = f"{self.base_url}/{self.instagram_account_id}"
             params = {
-                "fields": "account_type,username,name,profile_picture_url,followers_count",
+                "fields": "username,name,profile_picture_url,followers_count",
                 "access_token": self.access_token
             }
             
@@ -93,19 +84,27 @@ class InstagramUploadPOC(POCTemplate):
             logger.error(f"Erro ao obter informações da conta: {e}")
             return {}
     
-    def create_media_container(self) -> str:
-        """Criar container de mídia para o vídeo"""
+    def create_media_container(self, media_url: str, media_type: str, caption: str) -> str:
+        """Criar container de mídia para o Instagram"""
         try:
             logger.info("Criando container de mídia...")
             
             url = f"{self.base_url}/{self.instagram_account_id}/media"
             
             data = {
-                "media_type": "REELS",  # Para vídeos curtos (Reels)
-                "video_url": self.video_url,
-                "caption": self.video_caption,
-                "access_token": self.access_token
+                "access_token": self.access_token,
+                "caption": caption or self.media_caption
             }
+
+            if media_type == "VIDEO":
+                data.update({
+                    "media_type": "REELS",
+                    "video_url": media_url,
+                })
+            else:
+                data.update({
+                    "image_url": media_url,
+                })
             
             response = requests.post(url, data=data)
             
@@ -146,7 +145,7 @@ class InstagramUploadPOC(POCTemplate):
     def publish_media(self, container_id: str) -> Dict[str, Any]:
         """Publicar o vídeo no Instagram"""
         try:
-            logger.info("Publicando vídeo...")
+            logger.info("Publicando mídia...")
             
             url = f"{self.base_url}/{self.instagram_account_id}/media_publish"
             
@@ -160,14 +159,14 @@ class InstagramUploadPOC(POCTemplate):
             if response.status_code == 200:
                 result = response.json()
                 media_id = result.get("id")
-                logger.info(f"Vídeo publicado com sucesso: {media_id}")
+                logger.info(f"Mídia publicada com sucesso: {media_id}")
                 return {"status": "success", "media_id": media_id}
             else:
                 logger.error(f"Erro ao publicar: {response.status_code} - {response.text}")
                 return {"status": "error", "message": response.text}
                 
         except Exception as e:
-            logger.error(f"Erro ao publicar vídeo: {e}")
+            logger.error(f"Erro ao publicar media: {e}")
             return {"status": "error", "message": str(e)}
     
     def get_media_info(self, media_id: str) -> Dict[str, Any]:
@@ -191,53 +190,55 @@ class InstagramUploadPOC(POCTemplate):
             logger.error(f"Erro ao obter informações do vídeo: {e}")
             return {}
     
-    def upload_video(self) -> Dict[str, Any]:
-        """Processo completo de upload do vídeo"""
+    def upload_media(self, media_url: str, media_type: str, caption: str) -> Dict[str, Any]:
+        """Processo completo de upload da mídia"""
         try:
             # Passo 1: Criar container de mídia
-            container_id = self.create_media_container()
+            container_id = self.create_media_container(media_url, media_type, caption)
             if not container_id:
                 return {"status": "error", "message": "Falha ao criar container de mídia"}
             
-            # Passo 2: Aguardar processamento do vídeo
-            logger.info("Aguardando processamento do vídeo...")
+            # Passo 2: Aguardar processamento da mídia
+            logger.info("Aguardando processamento da mídia...")
             max_attempts = 30
             attempt = 0
             
             while attempt < max_attempts:
                 status_info = self.check_container_status(container_id)
                 status_code = status_info.get("status_code")
-                
+                status = status_info.get("status")
+
                 if status_code == "FINISHED":
-                    logger.info("Vídeo processado com sucesso")
+                    logger.info("Processamento concluído com sucesso")
                     break
                 elif status_code == "ERROR":
-                    logger.error("Erro no processamento do vídeo")
-                    return {"status": "error", "message": "Erro no processamento do vídeo"}
+                    error_message = status_info.get("status", "Erro no processamento da mídia")
+                    logger.error(f"Erro no processamento da mídia: {error_message}")
+                    return {"status": "error", "message": error_message}
                 elif status_code == "IN_PROGRESS":
-                    logger.info(f"Processamento em andamento... (tentativa {attempt + 1}/{max_attempts})")
+                    logger.info(f"Processamento em andamento ({status})... (tentativa {attempt + 1}/{max_attempts})")
                     time.sleep(10)  # Aguardar 10 segundos
                     attempt += 1
                 else:
-                    logger.info(f"Status: {status_code}, aguardando...")
+                    logger.info(f"Status: {status_code or status}, aguardando...")
                     time.sleep(5)
                     attempt += 1
             
             if attempt >= max_attempts:
-                return {"status": "error", "message": "Timeout no processamento do vídeo"}
+                return {"status": "error", "message": "Timeout no processamento da mídia"}
             
-            # Passo 3: Publicar o vídeo
+            # Passo 3: Publicar a mídia
             publish_result = self.publish_media(container_id)
             
             if publish_result["status"] == "success":
                 media_id = publish_result["media_id"]
                 
-                # Obter informações do vídeo publicado
+                # Obter informações da mídia publicada
                 media_info = self.get_media_info(media_id)
                 
                 return {
                     "status": "success",
-                    "message": "Vídeo enviado com sucesso para o Instagram",
+                    "message": "Mídia enviada com sucesso para o Instagram",
                     "data": {
                         "container_id": container_id,
                         "media_id": media_id,
@@ -253,8 +254,8 @@ class InstagramUploadPOC(POCTemplate):
             logger.error(f"Erro no upload do vídeo: {e}")
             return {"status": "error", "message": str(e)}
     
-    def run(self) -> Dict[str, Any]:
-        """Executar upload do vídeo no Instagram"""
+    def run(self, media_url: str = None, media_type: str = None, caption: str = None) -> Dict[str, Any]:
+        """Executar upload no Instagram"""
         try:
             logger.info("Executando upload no Instagram...")
             
@@ -263,8 +264,23 @@ class InstagramUploadPOC(POCTemplate):
             if account_info:
                 logger.info(f"Conta conectada: @{account_info.get('username', 'N/A')}")
             
-            # Fazer upload do vídeo
-            upload_result = self.upload_video()
+            resolved_media_type = (media_type or self.default_media_type or "VIDEO").upper()
+            if resolved_media_type not in {"VIDEO", "IMAGE"}:
+                resolved_media_type = "VIDEO"
+            
+            resolved_media_url = media_url
+            if not resolved_media_url:
+                if resolved_media_type == "VIDEO":
+                    resolved_media_url = self.default_video_url
+                else:
+                    resolved_media_url = self.default_image_url
+            
+            if not resolved_media_url:
+                return {"status": "error", "message": "URL pública da mídia não informada e não configurada no .env"}
+            
+            resolved_caption = caption or self.media_caption
+            
+            upload_result = self.upload_media(resolved_media_url, resolved_media_type, resolved_caption)
             
             if upload_result["status"] == "success":
                 logger.info("Upload concluído com sucesso!")

@@ -99,10 +99,40 @@ class OpenAIImagePOC(POCTemplate):
                     }
                 }
             else:
+                # Parse do erro para mensagem mais clara
+                error_message = f"Erro na API OpenAI: {response.status_code}"
+                try:
+                    error_data = response.json()
+                    error_info = error_data.get("error", {})
+                    error_code = error_info.get("code", "")
+                    error_msg = error_info.get("message", "")
+                    
+                    # Tratar diferentes tipos de erro
+                    error_type = error_info.get("type", "")
+                    
+                    if error_code == "billing_hard_limit_reached":
+                        error_message = "Limite de faturamento atingido. Adicione créditos em https://platform.openai.com/account/billing"
+                    elif error_code == "insufficient_quota":
+                        error_message = "Cota insuficiente. Verifique seus créditos em https://platform.openai.com/account/billing"
+                    elif error_code == "invalid_api_key":
+                        error_message = "Chave API inválida. Verifique se está correta no arquivo .env"
+                    elif "rate_limit" in error_code.lower():
+                        error_message = f"Limite de taxa excedido. Aguarde um momento antes de tentar novamente."
+                    elif response.status_code == 500 or error_type == "server_error":
+                        error_message = (
+                            f"Erro temporário no servidor da OpenAI (500). "
+                            f"Tente novamente em alguns segundos. "
+                            f"Se persistir, verifique: https://status.openai.com/"
+                        )
+                    else:
+                        error_message = f"Erro: {error_msg} (código: {error_code})"
+                except:
+                    error_message = f"Erro na API: {response.status_code} - {response.text[:200]}"
+                
                 logger.error(f"Erro na API OpenAI: {response.status_code} - {response.text}")
                 return {
                     "status": "error",
-                    "message": f"Erro na API: {response.status_code}",
+                    "message": error_message,
                     "data": {}
                 }
                 

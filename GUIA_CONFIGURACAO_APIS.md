@@ -9,18 +9,20 @@ poetry run python scripts/setup_social_apis.py
 
 ## 📋 **CONFIGURAÇÃO MANUAL**
 
-### **1. 🤖 OpenAI (Para Geração de Imagens)**
+### **1. 🤖 Google Gemini (Para Geração de Imagens)**
 
 **Mais Fácil - Só precisa da chave API:**
 
-1. Acesse: https://platform.openai.com/
-2. Crie conta ou faça login
-3. Vá em "API Keys" → "Create new secret key"
-4. Copie a chave (começa com `sk-`)
+1. Acesse: https://aistudio.google.com/app/apikey
+2. Faça login com sua conta Google
+3. Clique em "Get API Keys" → "Create API Key"
+4. Copie a chave gerada
 5. Cole no seu `.env`:
 ```env
-OPENAI_API_KEY=sk-sua_chave_aqui
+GEMINI_API_KEY=sua_chave_gemini_aqui
 ```
+
+**⚠️ NOTA:** O Gemini não possui API pública de geração de imagens como o DALL-E. O sistema usa Gemini para melhorar prompts e gera placeholders. Para produção, considere integrar com Vertex AI Imagen. Veja `CONFIGURAR_GEMINI.md` para detalhes.
 
 ### **2. 🎵 TikTok (Para Publicação)**
 
@@ -89,13 +91,13 @@ poetry run python scripts/get_linkedin_token.py
 
 **Se você quer testar rapidamente, configure apenas:**
 
-1. **OpenAI** (para gerar imagens)
+1. **Google Gemini** (para melhorar prompts e gerar imagens)
 2. **Uma rede social** (TikTok, Instagram ou LinkedIn)
 
 **Exemplo mínimo:**
 ```env
-# Só OpenAI
-OPENAI_API_KEY=sk-sua_chave_aqui
+# Google Gemini
+GEMINI_API_KEY=sua_chave_gemini_aqui
 
 # Só TikTok
 TIKTOK_ACCESS_TOKEN=seu_token_aqui
@@ -137,7 +139,7 @@ poetry run python scripts/start_local_server.py
 
 ### **P: Quanto custa?**
 **R:** 
-- **OpenAI**: ~$0.02-0.08 por imagem
+- **Google Gemini**: Gratuito (com limites de uso)
 - **APIs Sociais**: Gratuitas (com limites)
 - **AWS S3**: Não necessário (sistema funciona sem)
 

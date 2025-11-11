@@ -5,8 +5,8 @@ Este projeto é um **sistema completo de automação de conteúdo** que gera ima
 ## 🎯 **O QUE O SISTEMA FAZ**
 
 ### **Fluxo Completo:**
-1. **🎨 Geração de Conteúdo**: Cria imagens usando OpenAI DALL-E
-2. **☁️ Armazenamento**: Salva em AWS S3 com URLs públicas
+1. **🎨 Geração de Conteúdo**: Cria imagens usando Google Gemini (melhora prompts e gera imagens)
+2. **☁️ Armazenamento**: Salva em AWS S3 com URLs públicas (opcional)
 3. **✅ Aprovação Humana**: Interface Streamlit para revisar e aprovar
 4. **📱 Publicação Automática**: Publica em TikTok, Instagram e LinkedIn
 5. **📊 Coleta de Métricas**: Monitora likes, comentários, visualizações
@@ -16,7 +16,7 @@ Este projeto é um **sistema completo de automação de conteúdo** que gera ima
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   OpenAI DALL-E │───▶│   AWS S3        │───▶│   Streamlit UI  │
+│   Google Gemini │───▶│   AWS S3        │───▶│   Streamlit UI  │
 │   (Geração IA)  │    │   (Storage)     │    │   (Aprovação)   │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
                                                        │
@@ -33,7 +33,7 @@ Este projeto é um **sistema completo de automação de conteúdo** que gera ima
 gerador-conteudo/
 ├── 📁 pocs/                          # POCs (Proofs of Concept)
 │   ├── 📁 ai_generation/             # Geração de conteúdo por IA
-│   │   └── openai_image_poc.py       # POC OpenAI DALL-E
+│   │   └── gemini_image_poc.py       # POC Google Gemini
 │   ├── 📁 storage/                   # Armazenamento em nuvem
 │   │   └── aws_s3_poc.py            # POC AWS S3
 │   ├── 📁 metrics/                   # Coleta de métricas
@@ -101,13 +101,15 @@ nano .env
 
 ## 🔑 **Configuração das APIs**
 
-### **OpenAI (Geração de Imagens)**
-1. Acesse [OpenAI Platform](https://platform.openai.com/)
-2. Crie uma API key
+### **Google Gemini (Geração de Imagens)**
+1. Acesse [Google AI Studio](https://aistudio.google.com/app/apikey)
+2. Faça login e crie uma API key
 3. Configure no `.env`:
 ```env
-OPENAI_API_KEY=sk-sua_chave_aqui
+GEMINI_API_KEY=sua_chave_gemini_aqui
 ```
+
+**⚠️ NOTA:** Veja `CONFIGURAR_GEMINI.md` para detalhes sobre limitações e opções de produção.
 
 ### **AWS S3 (Armazenamento)**
 1. Crie conta AWS
@@ -196,7 +198,7 @@ poetry run streamlit run web_interface/streamlit_app.py
 poetry run python scripts/run_poc.py
 
 # Executar POC específica
-poetry run python scripts/run_poc.py openai_image_poc
+poetry run python scripts/run_poc.py gemini_image_poc
 poetry run python scripts/run_poc.py aws_s3_poc
 poetry run python scripts/run_poc.py social_metrics_poc
 ```
@@ -204,7 +206,7 @@ poetry run python scripts/run_poc.py social_metrics_poc
 ## 📊 **Funcionalidades Principais**
 
 ### **🎨 Geração de Conteúdo**
-- ✅ Integração com OpenAI DALL-E 3
+- ✅ Integração com Google Gemini (melhoria de prompts e geração de imagens)
 - ✅ Configuração de tamanho (1024x1024, 1024x1792, 1792x1024)
 - ✅ Qualidade (standard, hd)
 - ✅ Estilo (vivid, natural)
@@ -250,7 +252,7 @@ poetry run python scripts/run_poc.py social_metrics_poc
 - **CSS**: Estilização personalizada
 
 ### **APIs Externas**
-- **OpenAI DALL-E**: Geração de imagens
+- **Google Gemini**: Melhoria de prompts e geração de imagens
 - **AWS S3**: Armazenamento em nuvem
 - **TikTok API**: Publicação no TikTok
 - **Instagram Graph API**: Publicação no Instagram
@@ -270,7 +272,7 @@ poetry run python scripts/run_poc.py social_metrics_poc
 - ✅ Streamlit (execução local)
 
 ### **Pago (Produção)**
-- 💰 **OpenAI DALL-E**: ~$0.02-0.08 por imagem
+- 💰 **Google Gemini**: Gratuito (com limites de uso)
 - 💰 **AWS S3**: ~$0.023 por GB/mês
 - 💰 **Hospedagem**: $5-20/mês (Railway, Render)
 

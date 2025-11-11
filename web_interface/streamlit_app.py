@@ -13,17 +13,32 @@ import json
 import logging
 from datetime import datetime
 from typing import Dict, Any, List
+from pathlib import Path
 import plotly.express as px
 import plotly.graph_objects as go
+from dotenv import load_dotenv
+
+# Carregar variáveis de ambiente do arquivo .env
+env_path = Path(__file__).parent.parent / '.env'
+if env_path.exists():
+    load_dotenv(env_path)
+    logger_env = logging.getLogger(__name__)
+    logger_env.info(f"Arquivo .env carregado de: {env_path}")
+else:
+    # Tentar carregar do diretório atual também
+    load_dotenv()
+    logger_env = logging.getLogger(__name__)
+    logger_env.warning(f"Arquivo .env não encontrado em: {env_path}")
 
 # Adicionar o diretório pai ao path para importar as POCs
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pocs.ai_generation.openai_image_poc import OpenAIImagePOC
+from pocs.ai_generation.gemini_image_poc import GeminiImagePOC
 from pocs.storage.aws_s3_poc import AWSS3POC
 from pocs.metrics.social_metrics_poc import SocialMetricsPOC
 from pocs.tiktok_poc import TikTokUploadPOC
 from pocs.instagram_poc import InstagramUploadPOC
+from pocs.linkedin_poc import LinkedInUploadPOC
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -80,11 +95,11 @@ if 'metrics_data' not in st.session_state:
 def initialize_pocs():
     """Inicializar POCs"""
     try:
-        # OpenAI Image POC
-        openai_poc = OpenAIImagePOC()
-        if not openai_poc.setup():
-            st.error("Erro ao configurar OpenAI POC")
-            return None, None, None, None, None
+        # Gemini Image POC
+        gemini_poc = GeminiImagePOC()
+        if not gemini_poc.setup():
+            st.error("Erro ao configurar Gemini POC")
+            return None, None, None, None, None, None
         
         # AWS S3 POC
         s3_poc = AWSS3POC()
@@ -100,35 +115,64 @@ def initialize_pocs():
         
         # Social Media POCs
         tiktok_poc = TikTokUploadPOC()
-        instagram_poc = InstagramUploadPOC()
+        if not tiktok_poc.setup():
+            st.warning("TikTok não configurado - verifique TIKTOK_ACCESS_TOKEN e TIKTOK_OPEN_ID no .env")
+            tiktok_poc = None
         
-        return openai_poc, s3_poc, metrics_poc, tiktok_poc, instagram_poc
+        instagram_poc = InstagramUploadPOC()
+        if not instagram_poc.setup():
+            st.warning("Instagram não configurado")
+            instagram_poc = None
+        
+        linkedin_poc = LinkedInUploadPOC()
+        if not linkedin_poc.setup():
+            st.warning("LinkedIn não configurado")
+            linkedin_poc = None
+        
+        return gemini_poc, s3_poc, metrics_poc, tiktok_poc, instagram_poc, linkedin_poc
         
     except Exception as e:
         st.error(f"Erro ao inicializar POCs: {e}")
-        return None, None, None, None, None
+        return None, None, None, None, None, None
 
-def generate_content(openai_poc, prompt: str, size: str, quality: str, style: str):
+def generate_content(gemini_poc, prompt: str, size: str, quality: str, style: str):
     """Gerar conteúdo usando IA"""
     try:
+        # Adicionar variação ao prompt para evitar imagens repetidas
+        import random
+        import time
+        variations = [
+            "versão única",
+            "perspectiva diferente",
+            "estilo único",
+            "abordagem criativa",
+            "conceito inovador"
+        ]
+        variation = random.choice(variations)
+        timestamp = int(time.time())
+        varied_prompt = f"{prompt}, {variation}, timestamp {timestamp}"
+        
         with st.spinner("Gerando conteúdo..."):
-            result = openai_poc.generate_image(prompt, size, quality, style)
+            result = gemini_poc.generate_image(varied_prompt, size, quality, style)
             
             if result["status"] == "success":
                 # Salvar imagem localmente
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"generated_{timestamp}.png"
-                filepath = openai_poc.save_image(
+                filepath = gemini_poc.save_image(
                     result["data"]["image_bytes"], 
                     filename,
                     "generated_images"
                 )
                 
                 if filepath:
+                    # Não gerar texto e hashtags aqui - será gerado na aba de aprovação quando necessário
                     content_data = {
                         "id": timestamp,
                         "prompt": prompt,
-                        "revised_prompt": result["data"].get("revised_prompt", prompt),
+                        "revised_prompt": result["data"].get("revised_prompt", result["data"].get("improved_prompt", prompt)),
+                        "post_text": "",  # Será gerado na aprovação
+                        "hashtags": "",  # Será gerado na aprovação
                         "size": size,
                         "quality": quality,
                         "style": style,
@@ -144,11 +188,19 @@ def generate_content(openai_poc, prompt: str, size: str, quality: str, style: st
                     st.error("Erro ao salvar imagem")
                     return None
             else:
-                st.error(f"Erro na geração: {result['message']}")
+                # Mensagem de erro mais clara
+                error_msg = result.get('message', 'Erro desconhecido')
+                if 'GEMINI_API_KEY' in error_msg or 'chave' in error_msg.lower() or 'key' in error_msg.lower():
+                    st.error(f"❌ {error_msg}")
+                    st.warning("💡 **Solução:** Verifique se a chave API do Gemini está correta no arquivo `.env` na raiz do projeto.")
+                    st.info("📝 Obtenha sua chave em: https://aistudio.google.com/app/apikey")
+                else:
+                    st.error(f"❌ Erro na geração: {error_msg}")
                 return None
                 
     except Exception as e:
         st.error(f"Erro na geração de conteúdo: {e}")
+        logger.exception("Exceção ao gerar conteúdo")
         return None
 
 def upload_to_storage(s3_poc, filepath: str, filename: str):
@@ -181,15 +233,103 @@ def upload_to_storage(s3_poc, filepath: str, filename: str):
             st.error(f"Erro no armazenamento local: {e}")
             return None
 
-def publish_to_social_media(platform: str, content_data: Dict, tiktok_poc, instagram_poc):
+def publish_to_social_media(platform: str, content_data: Dict, tiktok_poc, instagram_poc, linkedin_poc):
     """Publicar em rede social"""
     try:
         if platform == "tiktok" and tiktok_poc:
-            # Configurar vídeo para TikTok (você precisaria converter imagem para vídeo)
-            result = tiktok_poc.run()
+            # Para TikTok, aceitar tanto vídeo quanto imagem
+            # Se for imagem, será convertida automaticamente em vídeo curto
+            # No modo Sandbox, sempre usar GitHub Pages com PULL_FROM_URL
+            filepath = content_data.get("filepath")
+            public_url = content_data.get("public_url")
+            
+            # Verificar se é imagem ou vídeo pela extensão
+            is_image = False
+            is_video = False
+            
+            if filepath:
+                ext = os.path.splitext(filepath)[1].lower()
+                is_image = ext in ['.jpg', '.jpeg', '.png', '.webp', '.gif']
+                is_video = ext in ['.mp4', '.mov', '.webm', '.avi']
+            
+            # Configurar título e descrição
+            if content_data.get("custom_description"):
+                tiktok_poc.video_title = content_data["custom_description"][:100]  # TikTok limita título
+                tiktok_poc.video_description = content_data["custom_description"]
+            
+            # TikTok no modo Sandbox precisa usar GitHub Pages
+            # O tiktok_poc.run() já detecta automaticamente e faz upload para GitHub Pages se necessário
+            # Mas se já tiver public_url (S3), podemos usar diretamente se for do GitHub Pages
+            # Caso contrário, usar filepath local que será enviado para GitHub Pages automaticamente
+            
+            # Tentar publicar
+            if public_url:
+                # Verificar se URL é do GitHub Pages (ideal para Sandbox)
+                if 'github.io' in public_url.lower() or 'githubusercontent.com' in public_url.lower():
+                    # URL já está no GitHub Pages - perfeito para Sandbox
+                    if public_url.lower().endswith(('.jpg', '.jpeg', '.png', '.webp', '.gif')):
+                        result = tiktok_poc.run(image_url=public_url)
+                    else:
+                        result = tiktok_poc.run(video_url=public_url)
+                else:
+                    # URL de S3 ou outro serviço - para Sandbox, melhor usar filepath local
+                    # para que o sistema faça upload para GitHub Pages automaticamente
+                    if filepath:
+                        if is_image:
+                            result = tiktok_poc.run(image_path=filepath)
+                        elif is_video:
+                            result = tiktok_poc.run(video_path=filepath)
+                        else:
+                            return {"status": "error", "message": "Formato de arquivo não suportado para TikTok (use MP4, JPG, PNG, etc)"}
+                    else:
+                        # Se não tem filepath, tentar usar a URL mesmo (pode funcionar se o domínio estiver verificado)
+                        if public_url.lower().endswith(('.jpg', '.jpeg', '.png', '.webp', '.gif')):
+                            result = tiktok_poc.run(image_url=public_url)
+                        else:
+                            result = tiktok_poc.run(video_url=public_url)
+            elif filepath:
+                # Verificar se o arquivo existe antes de tentar publicar
+                if not os.path.exists(filepath):
+                    # Tentar caminho absoluto
+                    abs_filepath = os.path.abspath(filepath)
+                    if os.path.exists(abs_filepath):
+                        filepath = abs_filepath
+                    else:
+                        return {"status": "error", "message": f"Arquivo não encontrado: {filepath}. Verifique se a imagem foi gerada corretamente."}
+                
+                # Usar filepath local - o sistema automaticamente faz upload para GitHub Pages e usa PULL_FROM_URL
+                if is_image:
+                    result = tiktok_poc.run(image_path=filepath)
+                elif is_video:
+                    result = tiktok_poc.run(video_path=filepath)
+                else:
+                    return {"status": "error", "message": "Formato de arquivo não suportado para TikTok (use MP4, JPG, PNG, etc)"}
+            else:
+                return {"status": "error", "message": "Nenhum arquivo ou URL disponível para TikTok"}
         elif platform == "instagram" and instagram_poc:
             # Configurar para Instagram
             result = instagram_poc.run()
+        elif platform == "linkedin" and linkedin_poc:
+            # Publicar no LinkedIn
+            # Prioridade: custom_description > post_text > revised_prompt > prompt
+            text = content_data.get("custom_description") or \
+                   content_data.get("post_text") or \
+                   content_data.get("revised_prompt") or \
+                   content_data.get("prompt", "")
+            hashtags = content_data.get("hashtags", "")
+            
+            # Combinar texto e hashtags
+            post_text = f"{text}\n\n{hashtags}" if hashtags else text
+            
+            # Obter URL da imagem se disponível
+            image_url = content_data.get("public_url") or content_data.get("filepath")
+            
+            # Tentar configurar se ainda não estiver configurado
+            if not linkedin_poc.access_token:
+                if not linkedin_poc.setup():
+                    return {"status": "error", "message": "LinkedIn não configurado. Configure o token no arquivo .env"}
+            
+            result = linkedin_poc.run(text=post_text, image_url=image_url)
         else:
             return {"status": "error", "message": f"Plataforma {platform} não configurada"}
         
@@ -208,18 +348,20 @@ def main():
     st.sidebar.title("📋 Menu")
     page = st.sidebar.selectbox(
         "Escolha uma página:",
-        ["🏠 Dashboard", "🎨 Gerar Conteúdo", "✅ Aprovar Conteúdo", "📊 Métricas", "⚙️ Configurações"]
+        ["🏠 Dashboard", "🎨 Gerar Conteúdo", "✅ Aprovar Conteúdo", "📤 Upload TikTok", "📊 Métricas", "⚙️ Configurações"]
     )
     
     # Inicializar POCs
-    openai_poc, s3_poc, metrics_poc, tiktok_poc, instagram_poc = initialize_pocs()
+    gemini_poc, s3_poc, metrics_poc, tiktok_poc, instagram_poc, linkedin_poc = initialize_pocs()
     
     if page == "🏠 Dashboard":
         show_dashboard()
     elif page == "🎨 Gerar Conteúdo":
-        show_content_generation(openai_poc, s3_poc)
+        show_content_generation(gemini_poc, s3_poc)
     elif page == "✅ Aprovar Conteúdo":
-        show_content_approval(tiktok_poc, instagram_poc, s3_poc)
+        show_content_approval(tiktok_poc, instagram_poc, linkedin_poc, s3_poc)
+    elif page == "📤 Upload TikTok":
+        show_tiktok_manual_upload(tiktok_poc)
     elif page == "📊 Métricas":
         show_metrics_dashboard(metrics_poc)
     elif page == "⚙️ Configurações":
@@ -313,12 +455,12 @@ def show_dashboard():
     else:
         st.info("Nenhum conteúdo gerado ainda.")
 
-def show_content_generation(openai_poc, s3_poc):
+def show_content_generation(gemini_poc, s3_poc):
     """Mostrar página de geração de conteúdo"""
     st.header("🎨 Gerar Conteúdo com IA")
     
-    if not openai_poc:
-        st.error("OpenAI não configurado. Verifique as configurações.")
+    if not gemini_poc:
+        st.error("Gemini não configurado. Verifique as configurações.")
         return
     
     # Formulário de geração
@@ -357,7 +499,7 @@ def show_content_generation(openai_poc, s3_poc):
         submitted = st.form_submit_button("🚀 Gerar Conteúdo")
         
         if submitted and prompt:
-            content_data = generate_content(openai_poc, prompt, size, quality, style)
+            content_data = generate_content(gemini_poc, prompt, size, quality, style)
             
             if content_data:
                 st.success("Conteúdo gerado com sucesso!")
@@ -377,7 +519,8 @@ def show_content_generation(openai_poc, s3_poc):
                     st.write(f"**Estilo:** {content_data['style']}")
                     st.write(f"**Status:** {content_data['status']}")
                 
-                # Upload para S3 se configurado
+                # Upload para armazenamento (S3 ou GitHub Pages para TikTok)
+                # Para TikTok no modo Sandbox, será usado GitHub Pages automaticamente ao publicar
                 if s3_poc:
                     with st.spinner("Fazendo upload para armazenamento em nuvem..."):
                         public_url = upload_to_storage(
@@ -388,10 +531,13 @@ def show_content_generation(openai_poc, s3_poc):
                         if public_url:
                             st.success(f"Upload concluído: {public_url}")
                             content_data["public_url"] = public_url
+                else:
+                    # Sem S3 configurado - TikTok usará GitHub Pages automaticamente ao publicar
+                    st.info("💡 Para TikTok: O sistema fará upload automático para GitHub Pages ao publicar (modo Sandbox)")
         elif submitted and not prompt:
             st.error("Por favor, insira um prompt para gerar o conteúdo.")
 
-def show_content_approval(tiktok_poc, instagram_poc, s3_poc):
+def show_content_approval(tiktok_poc, instagram_poc, linkedin_poc, s3_poc):
     """Mostrar página de aprovação de conteúdo"""
     st.header("✅ Aprovar e Publicar Conteúdo")
     
@@ -419,17 +565,43 @@ def show_content_approval(tiktok_poc, instagram_poc, s3_poc):
                 with st.form(f"approval_form_{content['id']}"):
                     st.subheader("📝 Detalhes da Publicação")
                     
-                    # Descrição personalizada
+                    # Gerar texto e hashtags apenas se não existirem
+                    if not content.get("post_text") or not content.get("hashtags"):
+                        with st.spinner("Gerando texto profissional e hashtags..."):
+                            # Buscar o gemini_poc da sessão ou inicializar
+                            from pocs.ai_generation.gemini_image_poc import GeminiImagePOC
+                            gemini_poc = GeminiImagePOC()
+                            if gemini_poc.setup():
+                                if not content.get("post_text"):
+                                    try:
+                                        content["post_text"] = gemini_poc.generate_post_text(content.get("prompt", ""), "linkedin")
+                                    except Exception as e:
+                                        logger.warning(f"Erro ao gerar texto: {e}")
+                                        content["post_text"] = content.get("revised_prompt", content.get("prompt", ""))
+                                
+                                if not content.get("hashtags"):
+                                    try:
+                                        content["hashtags"] = gemini_poc.generate_hashtags(content.get("prompt", ""), "linkedin")
+                                    except Exception as e:
+                                        logger.warning(f"Erro ao gerar hashtags: {e}")
+                                        content["hashtags"] = ""
+                    
+                    # Descrição personalizada (usar texto profissional gerado por padrão)
+                    default_text = content.get("post_text") or content.get("revised_prompt", content.get("prompt", ""))
                     custom_description = st.text_area(
                         "Descrição do post:",
-                        value=content["revised_prompt"],
-                        height=100
+                        value=default_text,
+                        height=150,
+                        help="Texto profissional. Você pode editar antes de publicar."
                     )
                     
-                    # Hashtags
+                    # Hashtags (usar hashtags geradas por padrão)
+                    default_hashtags = content.get("hashtags", "")
                     hashtags = st.text_input(
                         "Hashtags:",
-                        placeholder="#ai #arte #digital"
+                        value=default_hashtags,
+                        placeholder="#ai #arte #digital",
+                        help="Hashtags profissionais. Você pode editar antes de publicar."
                     )
                     
                     # Plataformas
@@ -465,17 +637,24 @@ def show_content_approval(tiktok_poc, instagram_poc, s3_poc):
                         published_platforms = []
                         
                         if publish_tiktok:
-                            result = publish_to_social_media("tiktok", content, tiktok_poc, instagram_poc)
-                            if result["status"] == "success":
-                                published_platforms.append("tiktok")
+                            with st.spinner("📤 Publicando no TikTok (modo Sandbox - usando GitHub Pages)..."):
+                                result = publish_to_social_media("tiktok", content, tiktok_poc, instagram_poc, linkedin_poc)
+                                if result["status"] == "success":
+                                    published_platforms.append("tiktok")
+                                    st.success("✅ Publicado no TikTok com sucesso!")
+                                elif result["status"] == "pending":
+                                    published_platforms.append("tiktok")
+                                    st.warning("⏳ Upload iniciado - o TikTok está processando o vídeo. Verifique sua conta em alguns minutos.")
+                                else:
+                                    st.error(f"❌ Erro ao publicar no TikTok: {result.get('message', 'Erro desconhecido')}")
                         
                         if publish_instagram:
-                            result = publish_to_social_media("instagram", content, tiktok_poc, instagram_poc)
+                            result = publish_to_social_media("instagram", content, tiktok_poc, instagram_poc, linkedin_poc)
                             if result["status"] == "success":
                                 published_platforms.append("instagram")
                         
                         if publish_linkedin:
-                            result = publish_to_social_media("linkedin", content, tiktok_poc, instagram_poc)
+                            result = publish_to_social_media("linkedin", content, tiktok_poc, instagram_poc, linkedin_poc)
                             if result["status"] == "success":
                                 published_platforms.append("linkedin")
                         
@@ -592,16 +771,158 @@ def show_metrics_dashboard(metrics_poc):
     else:
         st.info("Nenhuma métrica disponível. Publique conteúdo e clique em 'Atualizar Métricas'.")
 
+def show_tiktok_manual_upload(tiktok_poc):
+    """Mostrar página de upload manual do TikTok"""
+    st.header("📤 Upload Manual - TikTok")
+    
+    if not tiktok_poc:
+        st.error("❌ TikTok não está configurado. Verifique as configurações:")
+        st.warning("""
+        **Variáveis necessárias no arquivo `.env`:**
+        - `TIKTOK_ACCESS_TOKEN` - Token de acesso do TikTok
+        - `TIKTOK_OPEN_ID` - ID aberto do TikTok
+        - `GITHUB_TOKEN` (opcional) - Para upload automático ao GitHub Pages
+        - `GITHUB_REPO` (opcional) - Repositório do GitHub Pages (ex: usuario/repositorio)
+        
+        Para obter os tokens, execute:
+        ```bash
+        poetry run python scripts/get_tiktok_token.py
+        ```
+        """)
+        return
+    
+    st.info("💡 **Dica:** Faça upload de um vídeo local e ele será automaticamente enviado para o TikTok via GitHub Pages (modo Sandbox)")
+    
+    with st.form("tiktok_manual_upload_form"):
+        st.subheader("📁 Selecionar Vídeo")
+        
+        # Upload de arquivo
+        uploaded_file = st.file_uploader(
+            "Escolha um vídeo para publicar no TikTok",
+            type=['mp4', 'mov', 'avi', 'webm'],
+            help="Formatos suportados: MP4, MOV, AVI, WEBM. Tamanho recomendado: até 287MB"
+        )
+        
+        st.subheader("📝 Detalhes da Publicação")
+        
+        # Título e descrição
+        video_title = st.text_input(
+            "Título do vídeo:",
+            value="Post automático via API",
+            max_chars=100,
+            help="Máximo de 100 caracteres"
+        )
+        
+        video_description = st.text_area(
+            "Descrição do vídeo:",
+            value="Vídeo publicado automaticamente via API do TikTok",
+            height=150,
+            help="Descrição completa do vídeo"
+        )
+        
+        # Privacidade
+        privacy_options = {
+            "SELF_ONLY": "Apenas eu (Recomendado para Sandbox)",
+            "PUBLIC_TO_EVERYONE": "Público (requer aprovação)"
+        }
+        privacy_level = st.selectbox(
+            "Nível de privacidade:",
+            options=list(privacy_options.keys()),
+            format_func=lambda x: privacy_options[x],
+            help="No modo Sandbox, use 'SELF_ONLY'"
+        )
+        
+        # Botão de envio
+        submitted = st.form_submit_button("🚀 Publicar no TikTok", type="primary")
+        
+        if submitted:
+            if not uploaded_file:
+                st.error("❌ Por favor, selecione um vídeo para fazer upload")
+            else:
+                # Salvar arquivo temporário
+                import tempfile
+                temp_dir = tempfile.mkdtemp()
+                temp_video_path = os.path.join(temp_dir, uploaded_file.name)
+                
+                try:
+                    # Salvar arquivo
+                    with open(temp_video_path, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+                    
+                    st.success(f"✅ Vídeo carregado: {uploaded_file.name} ({uploaded_file.size / 1024 / 1024:.2f} MB)")
+                    
+                    # Configurar TikTok POC
+                    tiktok_poc.video_title = video_title
+                    tiktok_poc.video_description = video_description
+                    tiktok_poc.privacy_level = privacy_level
+                    
+                    # Publicar
+                    with st.spinner("📤 Publicando no TikTok (modo Sandbox - usando GitHub Pages)..."):
+                        result = tiktok_poc.run(video_path=temp_video_path)
+                    
+                    if result["status"] == "success":
+                        st.success("✅ Publicado no TikTok com sucesso!")
+                        if "data" in result:
+                            data = result["data"]
+                            st.json({
+                                "publish_id": data.get("publish_id", "N/A"),
+                                "status": data.get("status", "N/A"),
+                                "video_id": data.get("video_id", "N/A"),
+                                "share_url": data.get("share_url", "N/A"),
+                                "item_id": data.get("item_id", "N/A")
+                            })
+                    elif result["status"] == "pending":
+                        st.warning("⏳ Upload iniciado - o TikTok está processando o vídeo. Verifique sua conta em alguns minutos.")
+                        if "data" in result:
+                            st.info(f"**Publish ID:** {result['data'].get('publish_id', 'N/A')}")
+                    else:
+                        error_msg = result.get('message', 'Erro desconhecido')
+                        st.error(f"❌ Erro ao publicar: {error_msg}")
+                        
+                        # Mensagens de ajuda específicas
+                        if "access token" in error_msg.lower() or "401" in error_msg:
+                            st.warning("""
+                            **Token inválido ou expirado!**
+                            
+                            Para obter novos tokens:
+                            1. Execute: `poetry run python scripts/get_tiktok_token.py`
+                            2. Siga as instruções para autorizar
+                            3. Adicione os tokens ao arquivo `.env`
+                            4. Reinicie a interface Streamlit
+                            """)
+                        elif "domain" in error_msg.lower() or "verification" in error_msg.lower():
+                            st.warning("""
+                            **Problema de verificação de domínio!**
+                            
+                            Verifique:
+                            1. Se o domínio está verificado no TikTok Developer Portal
+                            2. Se o arquivo `.txt` de verificação está no GitHub Pages
+                            3. Se a URL do GitHub Pages está correta no `.env`
+                            """)
+                except Exception as e:
+                    st.error(f"❌ Erro ao processar vídeo: {str(e)}")
+                    logger.exception("Erro ao fazer upload manual do TikTok")
+                finally:
+                    # Limpar arquivo temporário
+                    try:
+                        if os.path.exists(temp_video_path):
+                            os.remove(temp_video_path)
+                        if os.path.exists(temp_dir):
+                            os.rmdir(temp_dir)
+                    except:
+                        pass
+
 def show_settings():
     """Mostrar página de configurações"""
     st.header("⚙️ Configurações")
     
     st.subheader("🔑 Chaves de API")
     
-    # OpenAI
-    with st.expander("OpenAI"):
-        st.text_input("OPENAI_API_KEY", type="password", help="Chave da API do OpenAI")
-        st.info("Necessário para geração de imagens com DALL-E")
+    # Google Gemini
+    with st.expander("Google Gemini"):
+        st.text_input("GEMINI_API_KEY", type="password", help="Chave da API do Google Gemini")
+        st.info("Necessário para geração de imagens com Gemini/Imagen")
+        st.info("📝 Obtenha sua chave em: https://aistudio.google.com/app/apikey")
     
     # AWS S3
     with st.expander("AWS S3"):

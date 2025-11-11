@@ -51,7 +51,12 @@ class AWSS3POC(POCTemplate):
                 return False
             
             if not self.bucket_name:
-                logger.error("S3_BUCKET_NAME não encontrado nas variáveis de ambiente")
+                logger.warning("S3_BUCKET_NAME não encontrado nas variáveis de ambiente. S3 será desabilitado.")
+                return False
+            
+            # Verificar se é um placeholder
+            if 'seu-bucket-s3-aqui' in self.bucket_name.lower() or 'example' in self.bucket_name.lower():
+                logger.warning(f"Bucket '{self.bucket_name}' parece ser um placeholder. Configure um bucket real no arquivo .env")
                 return False
             
             # Criar cliente S3
@@ -67,8 +72,16 @@ class AWSS3POC(POCTemplate):
                 self.s3_client.head_bucket(Bucket=self.bucket_name)
                 logger.info(f"Bucket '{self.bucket_name}' encontrado")
             except Exception as e:
-                logger.error(f"Erro ao acessar bucket '{self.bucket_name}': {e}")
-                return False
+                # Se for um placeholder ou bucket não encontrado, não é crítico
+                if 'seu-bucket-s3-aqui' in self.bucket_name.lower() or 'example' in self.bucket_name.lower():
+                    logger.warning(f"Bucket '{self.bucket_name}' parece ser um placeholder. Configure um bucket real no arquivo .env")
+                    return False
+                elif '403' in str(e) or 'Forbidden' in str(e):
+                    logger.warning(f"Acesso negado ao bucket '{self.bucket_name}'. Verifique permissões e credenciais AWS.")
+                    return False
+                else:
+                    logger.error(f"Erro ao acessar bucket '{self.bucket_name}': {e}")
+                    return False
             
             logger.info("Configuração do S3 concluída com sucesso")
             return True

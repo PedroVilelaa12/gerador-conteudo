@@ -189,7 +189,7 @@ def mostrar_proximos_passos():
     print("\n7. Adicionar novas dependências:")
     print("   poetry add nome-da-biblioteca")
     print("   poetry add --group dev nome-da-biblioteca-dev")
-    print("   poetry add --group ai openai")
+    print("   poetry add --group ai google-generativeai")
     print("   poetry add --group web streamlit")
     
     print("\n8. Atualizar dependências:")

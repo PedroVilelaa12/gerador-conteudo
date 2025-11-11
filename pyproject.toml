@@ -46,7 +46,7 @@ python-dotenv = "^1.0.0"
 
 [tool.poetry.group.ai.dependencies]
 # Dependências para IA e geração de conteúdo
-openai = "^1.0.0"
+google-generativeai = "^0.3.0"
 pillow = "^10.0.0"
 opencv-python = "^4.8.0"
 moviepy = "^1.0.3"

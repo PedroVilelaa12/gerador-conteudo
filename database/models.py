@@ -73,7 +73,7 @@ class APIConfig(Base):
     __tablename__ = 'api_config'
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    platform = Column(String(50), nullable=False, unique=True)  # openai, tiktok, instagram, linkedin, aws
+    platform = Column(String(50), nullable=False, unique=True)  # gemini, tiktok, instagram, linkedin, aws
     api_key = Column(String(500))
     access_token = Column(String(500))
     refresh_token = Column(String(500))

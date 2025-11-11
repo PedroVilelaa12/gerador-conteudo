@@ -17,15 +17,31 @@ def get_linkedin_tokens():
     # Configurações (substitua pelos seus valores)
     CLIENT_ID = input("Digite seu LinkedIn Client ID: ").strip()
     CLIENT_SECRET = input("Digite seu LinkedIn Client Secret: ").strip()
-    REDIRECT_URI = "https://localhost/"
+    REDIRECT_URI = input("Digite a Redirect URI configurada (ex: http://localhost:8051/callback): ").strip() or "http://localhost:8051/callback"
     
     # URL de autorização
+    print("\n📋 Escopos disponíveis:")
+    print("   1. w_member_social (para publicar posts) - OBRIGATÓRIO")
+    print("   2. w_member_social + openid + profile (obter URN automaticamente) - RECOMENDADO")
+    print("\n⚠️  Para usar openid+profile, você precisa habilitar 'Sign In with LinkedIn using OpenID Connect'")
+    print("    no LinkedIn Developer Portal → Products")
+    
+    use_openid = input("\nDeseja tentar usar openid+profile? (s/n) [n]: ").strip().lower()
+    
+    if use_openid == 's':
+        scope = 'w_member_social openid profile'
+        print("✅ Tentando com escopos: w_member_social openid profile")
+    else:
+        scope = 'w_member_social'
+        print("✅ Usando apenas: w_member_social")
+        print("⚠️  Você precisará configurar LINKEDIN_PERSON_URN manualmente no .env")
+    
     auth_params = {
         'response_type': 'code',
         'client_id': CLIENT_ID,
         'redirect_uri': REDIRECT_URI,
         'state': 'random_state_string',
-        'scope': 'r_liteprofile,r_emailaddress,w_member_social'
+        'scope': scope
     }
     
     auth_url = f"https://www.linkedin.com/oauth/v2/authorization?{urlencode(auth_params)}"
@@ -35,19 +51,69 @@ def get_linkedin_tokens():
     print("\n📋 INSTRUÇÕES:")
     print("1. Autorize a aplicação no LinkedIn")
     print("2. Você será redirecionado para uma URL com 'code='")
-    print("3. Copie a URL completa e cole aqui")
+    print("3. Copie a URL completa (mesmo se der erro 404)")
+    print("\n💡 DICAS PARA COLAR:")
+    print("   - PowerShell: Clique com botão direito no terminal → Paste")
+    print("   - Ou pressione: Ctrl+Shift+V")
+    print("   - Ou apenas digite a URL manualmente")
+    print("\n📌 EXEMPLO do que colar:")
+    print(f"   {REDIRECT_URI}?code=AQTxxx...&state=...")
     
     webbrowser.open(auth_url)
     
     # Obter código de autorização
-    redirect_url = input("\nCole a URL de redirecionamento aqui: ").strip()
+    print("\n" + "="*60)
+    print("⚠️  IMPORTANTE: Copie a URL COMPLETA da barra de endereços")
+    print("   Depois clique com botão direito no terminal e selecione 'Paste'")
+    print("   Ou pressione Ctrl+Shift+V")
+    print("="*60)
+    redirect_url = input("\n✏️  Cole a URL de redirecionamento aqui: ").strip()
+    
+    # Se estiver vazia ou parecer inválida, tentar novamente
+    if not redirect_url or len(redirect_url) < 20:
+        print("\n⚠️  URL parece estar vazia ou incompleta.")
+        print("💡 Tente novamente:")
+        print("   1. Vá ao navegador")
+        print("   2. Copie TUDO da barra de endereços (Ctrl+L para selecionar)")
+        print("   3. Clique com botão direito no terminal → Paste")
+        redirect_url = input("\n✏️  Cole a URL novamente: ").strip()
+    
+    # Verificar se a URL é a correta
+    if 'linkedin.com/oauth/v2/authorization' in redirect_url:
+        print("\n" + "="*60)
+        print("❌ ERRO: Você colou a URL ERRADA!")
+        print("="*60)
+        print("Você colou a URL INICIAL (que o script abre)")
+        print("Você precisa colar a URL de REDIRECIONAMENTO!")
+        print("\n📋 O QUE FAZER:")
+        print("1. No navegador, clique em 'Allow' (Permitir)")
+        print("2. AGUARDE o LinkedIn redirecionar")
+        print("3. Copie a URL da BARRA DE ENDEREÇOS")
+        print("   (Deve começar com: http://localhost:8501/callback?code=...)")
+        print("4. Cole novamente no terminal")
+        print("="*60)
+        
+        # Tentar novamente
+        redirect_url = input("\n✏️  Cole a URL CORRETA de redirecionamento: ").strip()
     
     # Extrair código da URL
     parsed_url = urlparse(redirect_url)
     query_params = parse_qs(parsed_url.query)
     
     if 'code' not in query_params:
+        print("\n" + "="*60)
         print("❌ Código de autorização não encontrado na URL")
+        print("="*60)
+        print("A URL deve conter '?code=' seguido de uma string longa")
+        print("\n✅ URL CORRETA deve ser assim:")
+        print("   http://localhost:8501/callback?code=AQT123abc456...&state=...")
+        print("\n❌ URL ERRADA seria assim:")
+        print("   https://www.linkedin.com/oauth/v2/authorization?...")
+        print("\n💡 Tente novamente:")
+        print("   1. Vá ao navegador")
+        print("   2. Clique em 'Allow' se ainda não clicou")
+        print("   3. Copie a URL da barra de endereços DEPOIS do redirecionamento")
+        print("="*60)
         return None
     
     auth_code = query_params['code'][0]

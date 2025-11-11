@@ -93,25 +93,25 @@ def setup_linkedin():
     else:
         print("⏭️  Pulando configuração do LinkedIn")
 
-def setup_openai():
-    """Configurar OpenAI"""
-    print_step(4, "CONFIGURAÇÃO DO OPENAI")
+def setup_gemini():
+    """Configurar Google Gemini"""
+    print_step(4, "CONFIGURAÇÃO DO GOOGLE GEMINI")
     
-    print("🤖 Para configurar o OpenAI:")
-    print("1. Acesse: https://platform.openai.com/")
-    print("2. Crie uma conta ou faça login")
-    print("3. Vá em 'API Keys'")
-    print("4. Crie uma nova chave de API")
-    print("5. Copie a chave (começa com 'sk-')")
+    print("🤖 Para configurar o Google Gemini:")
+    print("1. Acesse: https://aistudio.google.com/app/apikey")
+    print("2. Faça login com sua conta Google")
+    print("3. Clique em 'Get API Key' ou 'Create API Key'")
+    print("4. Copie a chave gerada")
+    print("5. Cole aqui")
     
-    api_key = input("\nDigite sua chave da API OpenAI (ou pressione Enter para pular): ").strip()
+    api_key = input("\nDigite sua chave da API Gemini (ou pressione Enter para pular): ").strip()
     
-    if api_key and api_key.startswith('sk-'):
+    if api_key:
         # Salvar no .env
-        save_to_env('OPENAI_API_KEY', api_key)
-        print("✅ Chave do OpenAI salva com sucesso!")
+        save_to_env('GEMINI_API_KEY', api_key)
+        print("✅ Chave do Gemini salva com sucesso!")
     else:
-        print("⏭️  Pulando configuração do OpenAI")
+        print("⏭️  Pulando configuração do Gemini")
 
 def save_to_env(key, value):
     """Salvar variável no arquivo .env"""
@@ -165,7 +165,7 @@ def main():
     print("   • TikTok API (para publicação)")
     print("   • Instagram API (para publicação)")
     print("   • LinkedIn API (para publicação)")
-    print("   • OpenAI API (para geração de imagens)")
+    print("   • Google Gemini API (para geração de imagens)")
     
     # Verificar arquivo .env
     if not check_env_file():
@@ -175,7 +175,7 @@ def main():
     print("   O sistema funciona mesmo se você configurar apenas uma API.")
     
     # Configurar cada API
-    setup_openai()
+    setup_gemini()
     setup_tiktok()
     setup_instagram()
     setup_linkedin()

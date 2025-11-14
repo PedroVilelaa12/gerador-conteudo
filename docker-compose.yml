@@ -1,0 +1,48 @@
+services:
+  db:
+    image: postgres:16
+    container_name: curadoria-db
+    environment:
+      POSTGRES_DB: curadoria
+      POSTGRES_USER: curadoria
+      POSTGRES_PASSWORD: curadoria
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - curadoria-net
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: curadoria-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - curadoria-net
+
+  api:
+    build: ./backend
+    container_name: curadoria-api
+    depends_on:
+      - db
+      - ollama
+    env_file:
+      - backend/.env
+    environment:
+      # se quiser sobrescrever via compose, pode por aqui também
+      DATABASE_URL: postgresql+psycopg2://curadoria:curadoria@db:5432/curadoria
+      OLLAMA_BASE_URL: http://curadoria-ollama:11434
+    ports:
+      - "8000:8000"
+    networks:
+      - curadoria-net
+
+networks:
+  curadoria-net:
+
+volumes:
+  postgres_data:
+  ollama_data:
